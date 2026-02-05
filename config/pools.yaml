@@ -4,6 +4,8 @@ pools:
       name: "ethereum"
       chainId: 1
       rpcUrl: "${ETHEREUM_RPC_URL}"
+      backupRpcUrls:
+        - "${ETHEREUM_BACKUP_RPC_URL}"
     pool:
       token0:
         address: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
@@ -22,5 +24,7 @@ pools:
       minRebalanceIntervalMinutes: 30
       maxGasCostUsd: 5.0
       slippageTolerancePercent: 0.5
+      expectedPriceRatio: 1.0        # expected token0/token1 price (for depeg detection)
+      depegThresholdPercent: 5.0      # alert if price deviates more than 5%
     monitoring:
       checkIntervalSeconds: 30

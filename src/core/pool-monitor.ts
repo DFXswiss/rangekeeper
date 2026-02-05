@@ -20,13 +20,20 @@ export class PoolMonitor extends EventEmitter {
   private readonly logger = getLogger();
   private intervalHandle?: NodeJS.Timeout;
   private lastState?: PoolState;
+  private poolContract: Contract;
 
   constructor(
-    private readonly poolContract: Contract,
+    poolContract: Contract,
     private readonly poolId: string,
     private readonly checkIntervalMs: number,
   ) {
     super();
+    this.poolContract = poolContract;
+  }
+
+  setPoolContract(contract: Contract): void {
+    this.poolContract = contract;
+    this.logger.info({ poolId: this.poolId }, 'Pool contract updated (RPC failover)');
   }
 
   async fetchPoolState(): Promise<PoolState> {

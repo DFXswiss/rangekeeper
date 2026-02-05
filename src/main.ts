@@ -1,7 +1,7 @@
 import path from 'path';
-import { loadEnvConfig, loadPoolConfigs, getRpcUrl } from './config';
+import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
-import { getProvider, getWallet, verifyConnection } from './chain/evm-provider';
+import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -11,6 +11,7 @@ import { BalanceTracker } from './core/balance-tracker';
 import { SwapExecutor } from './swap/swap-executor';
 import { EmergencyStop } from './risk/emergency-stop';
 import { SlippageGuard } from './risk/slippage-guard';
+import { ILTracker } from './risk/il-tracker';
 import { StateStore } from './persistence/state-store';
 import { HistoryLogger } from './persistence/history-logger';
 import { CompositeNotifier, ConsoleNotifier, Notifier } from './notification/notifier';
@@ -50,9 +51,14 @@ async function main(): Promise<void> {
 
   for (const poolEntry of pools) {
     try {
-      const rpcUrl = poolEntry.chain.rpcUrl;
-      const provider = getProvider(rpcUrl);
-      const wallet = getWallet(env.PRIVATE_KEY, provider);
+      // Create failover provider with backup RPCs
+      const failoverProvider = createFailoverProvider(
+        poolEntry.chain.rpcUrl,
+        poolEntry.chain.backupRpcUrls ?? [],
+      );
+
+      let provider = failoverProvider.getProvider();
+      let wallet = getWallet(env.PRIVATE_KEY, provider);
 
       const { chainId, blockNumber } = await verifyConnection(provider);
       logger.info({ poolId: poolEntry.id, chainId, blockNumber, wallet: wallet.address }, 'Connected');
@@ -72,13 +78,27 @@ async function main(): Promise<void> {
 
       logger.info({ poolId: poolEntry.id, poolAddress }, 'Pool resolved');
 
-      const poolContract = getPoolContract(poolAddress, wallet);
+      let poolContract = getPoolContract(poolAddress, wallet);
       const poolMonitor = new PoolMonitor(poolContract, poolEntry.id, poolEntry.monitoring.checkIntervalSeconds * 1000);
       const positionManager = new PositionManager(wallet, poolEntry.pool.nftManagerAddress);
       const swapExecutor = new SwapExecutor(wallet, poolEntry.pool.swapRouterAddress);
       const emergencyStop = new EmergencyStop();
       const slippageGuard = new SlippageGuard(poolEntry.strategy.slippageTolerancePercent);
+      const ilTracker = new ILTracker();
       const balanceTracker = new BalanceTracker(wallet);
+
+      // Register failover callback to rebuild contracts with new provider
+      failoverProvider.setFailoverCallback((fromUrl, toUrl, newProvider) => {
+        logger.warn({ poolId: poolEntry.id, from: fromUrl, to: toUrl }, 'RPC failover: reconnecting contracts');
+        wallet = getWallet(env.PRIVATE_KEY, newProvider);
+        poolContract = getPoolContract(poolAddress, wallet);
+        poolMonitor.setPoolContract(poolContract);
+        // ctx.wallet is used by rebalance engine for on-demand contract creation
+        ctx.wallet = wallet;
+        notifier.notify(
+          `ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`,
+        ).catch(() => {});
+      });
 
       const ctx: RebalanceContext = {
         poolEntry,
@@ -88,10 +108,12 @@ async function main(): Promise<void> {
         swapExecutor,
         emergencyStop,
         slippageGuard,
+        ilTracker,
         balanceTracker,
         stateStore,
         historyLogger,
         notifier,
+        maxTotalLossPercent: env.MAX_TOTAL_LOSS_PERCENT,
       };
 
       const engine = new RebalanceEngine(ctx);
@@ -105,6 +127,7 @@ async function main(): Promise<void> {
       poolMonitor.on('approachingBoundary', (state) => engine.onPriceUpdate(state));
       poolMonitor.on('error', (err) => {
         logger.error({ poolId: poolEntry.id, err }, 'Pool monitor error');
+        failoverProvider.recordError();
       });
 
       // Start monitoring

@@ -2,34 +2,43 @@ import { BigNumber } from 'ethers';
 import { getLogger } from '../util/logger';
 import { PoolMonitor, PoolState, PositionRange } from './pool-monitor';
 import { PositionManager, MintResult, RemoveResult } from './position-manager';
-import { calculateRange, shouldRebalance } from './range-calculator';
-import { calculateSwap, SwapPlan } from '../swap/ratio-calculator';
+import { calculateRange, shouldRebalance, isInRange } from './range-calculator';
+import { calculateSwap } from '../swap/ratio-calculator';
 import { SwapExecutor } from '../swap/swap-executor';
 import { EmergencyStop } from '../risk/emergency-stop';
 import { SlippageGuard } from '../risk/slippage-guard';
+import { ILTracker } from '../risk/il-tracker';
 import { BalanceTracker } from './balance-tracker';
-import { StateStore, BotState } from '../persistence/state-store';
+import { StateStore } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
 import { updatePoolStatus } from '../health/health-server';
-import { StrategyConfig, PoolEntry } from '../config';
+import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
+import { getGasInfo, isGasSpike, estimateGasCostUsd } from '../chain/gas-oracle';
+import { tickToPrice } from '../util/tick-math';
 import { Wallet } from 'ethers';
 
 export type RebalanceState = 'IDLE' | 'MONITORING' | 'EVALUATING' | 'WITHDRAWING' | 'SWAPPING' | 'MINTING' | 'ERROR' | 'STOPPED';
 
+const REBALANCE_GAS_ESTIMATE = 800_000; // conservative estimate for full rebalance cycle
+const ETH_PRICE_USD_FALLBACK = 3000; // fallback if no oracle available
+
 export interface RebalanceContext {
   poolEntry: PoolEntry;
-  wallet: Wallet;
+  wallet: Wallet; // mutable: updated on RPC failover
   poolMonitor: PoolMonitor;
   positionManager: PositionManager;
   swapExecutor: SwapExecutor;
   emergencyStop: EmergencyStop;
   slippageGuard: SlippageGuard;
+  ilTracker: ILTracker;
   balanceTracker: BalanceTracker;
   stateStore: StateStore;
   historyLogger: HistoryLogger;
   notifier: Notifier;
+  ethPriceUsd?: number;
+  maxTotalLossPercent: number;
 }
 
 export class RebalanceEngine {
@@ -101,6 +110,8 @@ export class RebalanceEngine {
 
   async onPriceUpdate(poolState: PoolState): Promise<void> {
     if (this.state === 'STOPPED' || this.state === 'ERROR') return;
+    // Prevent re-entrant rebalance while already in progress
+    if (this.state !== 'MONITORING' && this.state !== 'IDLE') return;
 
     const { poolEntry } = this.ctx;
     const { strategy } = poolEntry;
@@ -112,6 +123,9 @@ export class RebalanceEngine {
       positionTickUpper: this.currentRange?.tickUpper,
       tokenId: this.currentTokenId?.toNumber(),
     });
+
+    // Check depeg
+    if (this.checkDepeg(poolState)) return;
 
     // No position yet → mint initial
     if (!this.currentTokenId) {
@@ -125,8 +139,112 @@ export class RebalanceEngine {
     }
   }
 
+  private checkDepeg(poolState: PoolState): boolean {
+    const { poolEntry, emergencyStop, notifier } = this.ctx;
+    const { strategy } = poolEntry;
+
+    if (!strategy.expectedPriceRatio) return false;
+
+    const currentPrice = tickToPrice(poolState.tick);
+    const deviation = Math.abs(currentPrice - strategy.expectedPriceRatio) / strategy.expectedPriceRatio * 100;
+    const threshold = strategy.depegThresholdPercent ?? 5;
+
+    if (deviation > threshold) {
+      this.logger.error(
+        { poolId: poolEntry.id, currentPrice, expectedPrice: strategy.expectedPriceRatio, deviation: deviation.toFixed(2) },
+        'TOKEN DEPEG DETECTED',
+      );
+      emergencyStop.trigger(`Token depeg: price ${currentPrice.toFixed(6)} deviates ${deviation.toFixed(2)}% from expected ${strategy.expectedPriceRatio}`);
+      notifier.notify(
+        `ALERT: DEPEG detected for ${poolEntry.id}!\n` +
+          `Current price: ${currentPrice.toFixed(6)}\n` +
+          `Expected: ${strategy.expectedPriceRatio}\n` +
+          `Deviation: ${deviation.toFixed(2)}%\n` +
+          `Action: closing position and stopping bot`,
+      ).catch(() => {});
+
+      this.emergencyWithdraw().catch((err) => {
+        this.logger.error({ err }, 'Failed emergency withdraw on depeg');
+      });
+      return true;
+    }
+
+    return false;
+  }
+
+  private async emergencyWithdraw(): Promise<void> {
+    const { poolEntry, positionManager, stateStore, historyLogger, notifier } = this.ctx;
+    const { strategy } = poolEntry;
+
+    if (!this.currentTokenId) return;
+
+    this.setState('WITHDRAWING');
+    try {
+      const pos = await positionManager.getPosition(this.currentTokenId);
+      if (!pos.liquidity.isZero()) {
+        await positionManager.removePosition(this.currentTokenId, pos.liquidity, strategy.slippageTolerancePercent);
+      }
+
+      historyLogger.log({
+        type: OperationType.EMERGENCY_STOP,
+        poolId: poolEntry.id,
+        tokenId: this.currentTokenId.toString(),
+      });
+
+      this.currentTokenId = undefined;
+      this.currentRange = undefined;
+      this.persistState(stateStore, poolEntry.id);
+    } catch (err) {
+      this.logger.error({ err }, 'Emergency withdraw failed');
+    }
+
+    this.setState('STOPPED');
+  }
+
+  private async checkGasCost(isOutOfRange: boolean): Promise<boolean> {
+    const { poolEntry, wallet } = this.ctx;
+    const { strategy } = poolEntry;
+
+    try {
+      const provider = wallet.provider;
+      const gasInfo = await getGasInfo(provider as any);
+
+      if (isGasSpike(gasInfo.gasPriceGwei)) {
+        this.logger.warn({ gasPriceGwei: gasInfo.gasPriceGwei }, 'Gas spike detected');
+        if (!isOutOfRange) {
+          this.logger.info('Skipping rebalance due to gas spike (still in range)');
+          return false;
+        }
+        this.logger.warn('Gas spike but position is out of range, proceeding anyway');
+      }
+
+      const ethPrice = this.ctx.ethPriceUsd ?? ETH_PRICE_USD_FALLBACK;
+      const estimatedCostUsd = estimateGasCostUsd(REBALANCE_GAS_ESTIMATE, gasInfo.gasPriceGwei, ethPrice);
+
+      if (estimatedCostUsd > strategy.maxGasCostUsd && !isOutOfRange) {
+        this.logger.info(
+          { estimatedCostUsd: estimatedCostUsd.toFixed(2), maxGasCostUsd: strategy.maxGasCostUsd },
+          'Skipping rebalance: gas cost exceeds limit (still in range)',
+        );
+        return false;
+      }
+
+      if (estimatedCostUsd > strategy.maxGasCostUsd) {
+        this.logger.warn(
+          { estimatedCostUsd: estimatedCostUsd.toFixed(2), maxGasCostUsd: strategy.maxGasCostUsd },
+          'Gas cost exceeds limit but position is out of range, proceeding',
+        );
+      }
+
+      return true;
+    } catch (err) {
+      this.logger.warn({ err }, 'Failed to check gas cost, proceeding with rebalance');
+      return true;
+    }
+  }
+
   private async mintInitialPosition(poolState: PoolState): Promise<void> {
-    const { poolEntry, wallet, positionManager, balanceTracker, stateStore, historyLogger, notifier } = this.ctx;
+    const { poolEntry, wallet, positionManager, balanceTracker, ilTracker, stateStore, historyLogger, notifier } = this.ctx;
     const { pool, strategy } = poolEntry;
 
     this.setState('MINTING');
@@ -158,6 +276,17 @@ export class RebalanceEngine {
       this.lastRebalanceTime = Date.now();
       this.consecutiveErrors = 0;
 
+      // Set IL tracker entry and initial portfolio value
+      const currentPrice = tickToPrice(poolState.tick);
+      const amount0Norm = parseFloat(result.amount0.toString()) / Math.pow(10, pool.token0.decimals);
+      const amount1Norm = parseFloat(result.amount1.toString()) / Math.pow(10, pool.token1.decimals);
+      ilTracker.setEntry(amount0Norm, amount1Norm, currentPrice);
+
+      // Estimate initial portfolio value (token0 priced via pool, token1 as base)
+      const initialValue = this.estimatePortfolioValue(balance0, balance1, pool.token0.decimals, pool.token1.decimals, currentPrice);
+      balanceTracker.setInitialValue(initialValue);
+      this.logger.info({ initialValueUsd: initialValue.toFixed(2) }, 'Initial portfolio value set');
+
       this.persistState(stateStore, poolEntry.id);
       historyLogger.log({
         type: OperationType.MINT,
@@ -183,13 +312,17 @@ export class RebalanceEngine {
   }
 
   private async executeRebalance(poolState: PoolState): Promise<void> {
-    const { poolEntry, wallet, positionManager, swapExecutor, slippageGuard, emergencyStop, balanceTracker, stateStore, historyLogger, notifier } = this.ctx;
+    const { poolEntry, wallet, positionManager, swapExecutor, emergencyStop, ilTracker, balanceTracker, stateStore, historyLogger, notifier } = this.ctx;
     const { pool, strategy } = poolEntry;
 
-    // Check min interval
+    const outOfRange = this.currentRange
+      ? !isInRange(poolState.tick, this.currentRange.tickLower, this.currentRange.tickUpper)
+      : true;
+
+    // Check min interval (skip only if still in range)
     const elapsed = Date.now() - this.lastRebalanceTime;
     const minInterval = strategy.minRebalanceIntervalMinutes * 60 * 1000;
-    if (elapsed < minInterval && this.currentRange && poolState.tick >= this.currentRange.tickLower && poolState.tick < this.currentRange.tickUpper) {
+    if (elapsed < minInterval && !outOfRange) {
       this.logger.info({ elapsed, minInterval }, 'Skipping rebalance: too soon and still in range');
       return;
     }
@@ -200,12 +333,23 @@ export class RebalanceEngine {
       return;
     }
 
+    // Gas cost check
+    const gasOk = await this.checkGasCost(outOfRange);
+    if (!gasOk) return;
+
     this.setState('EVALUATING');
-    this.logger.info({ poolId: poolEntry.id, tick: poolState.tick }, 'Starting rebalance');
+    this.logger.info({ poolId: poolEntry.id, tick: poolState.tick, outOfRange }, 'Starting rebalance');
 
     try {
-      // Pre-rebalance snapshot
-      const preSnapshot = await balanceTracker.takeSnapshot(pool.token0, pool.token1);
+      // Pre-rebalance value estimation
+      const preToken0 = getErc20Contract(pool.token0.address, wallet);
+      const preToken1 = getErc20Contract(pool.token1.address, wallet);
+      const [preBal0, preBal1] = await Promise.all([
+        preToken0.balanceOf(wallet.address),
+        preToken1.balanceOf(wallet.address),
+      ]);
+      const prePrice = tickToPrice(poolState.tick);
+      const preValue = this.estimatePortfolioValue(preBal0, preBal1, pool.token0.decimals, pool.token1.decimals, prePrice);
 
       // STEP 1: Withdraw
       this.setState('WITHDRAWING');
@@ -241,6 +385,8 @@ export class RebalanceEngine {
         newRange.tickLower,
         newRange.tickUpper,
         pool.feeTier,
+        pool.token0.address,
+        pool.token1.address,
       );
 
       if (swapPlan && swapPlan.amountIn.gt(0)) {
@@ -277,6 +423,40 @@ export class RebalanceEngine {
       this.lastRebalanceTime = Date.now();
       this.consecutiveErrors = 0;
 
+      // Calculate IL
+      const currentPrice = tickToPrice(freshState.tick);
+      const amount0Norm = parseFloat(mintResult.amount0.toString()) / Math.pow(10, pool.token0.decimals);
+      const amount1Norm = parseFloat(mintResult.amount1.toString()) / Math.pow(10, pool.token1.decimals);
+      const ilSnapshot = ilTracker.calculate(amount0Norm, amount1Norm, currentPrice);
+
+      // Post-rebalance value check
+      const postValue = this.estimatePortfolioValue(newBalance0, newBalance1, pool.token0.decimals, pool.token1.decimals, currentPrice);
+
+      // Check single-rebalance loss (>2% → pause + alert)
+      if (preValue > 0 && emergencyStop.checkRebalanceLoss(preValue, postValue)) {
+        await notifier.notify(
+          `ALERT: Rebalance loss too high for ${poolEntry.id}!\n` +
+            `Pre: $${preValue.toFixed(2)} → Post: $${postValue.toFixed(2)}\n` +
+            `Loss: ${(((preValue - postValue) / preValue) * 100).toFixed(2)}%\n` +
+            `Action: pausing bot`,
+        );
+        this.setState('STOPPED');
+        return;
+      }
+
+      // Check total portfolio loss (>maxTotalLossPercent → emergency stop)
+      const initialValue = balanceTracker.getInitialValue();
+      if (initialValue && emergencyStop.checkPortfolioLoss(postValue, initialValue, this.ctx.maxTotalLossPercent)) {
+        await this.emergencyWithdraw();
+        await notifier.notify(
+          `ALERT: Portfolio loss limit reached for ${poolEntry.id}!\n` +
+            `Initial: $${initialValue.toFixed(2)} → Current: $${postValue.toFixed(2)}\n` +
+            `Loss: ${(((initialValue - postValue) / initialValue) * 100).toFixed(2)}%\n` +
+            `Action: position closed, bot stopped`,
+        );
+        return;
+      }
+
       this.persistState(stateStore, poolEntry.id);
       historyLogger.log({
         type: OperationType.REBALANCE,
@@ -288,14 +468,20 @@ export class RebalanceEngine {
         amount1: mintResult.amount1.toString(),
         feesCollected0: removeResult?.fee0.toString(),
         feesCollected1: removeResult?.fee1.toString(),
+        ilPercent: ilSnapshot?.ilPercent?.toFixed(4),
       });
 
-      await notifier.notify(
+      let message =
         `Rebalance completed for ${poolEntry.id}\n` +
-          `New TokenId: ${mintResult.tokenId.toString()}\n` +
-          `New Range: [${newRange.tickLower}, ${newRange.tickUpper}]\n` +
-          `Price: [${newRange.priceLower.toFixed(6)}, ${newRange.priceUpper.toFixed(6)}]`,
-      );
+        `New TokenId: ${mintResult.tokenId.toString()}\n` +
+        `New Range: [${newRange.tickLower}, ${newRange.tickUpper}]\n` +
+        `Price: [${newRange.priceLower.toFixed(6)}, ${newRange.priceUpper.toFixed(6)}]`;
+
+      if (ilSnapshot) {
+        message += `\nIL: ${ilSnapshot.ilPercent.toFixed(4)}%`;
+      }
+
+      await notifier.notify(message);
 
       this.setState('MONITORING');
     } catch (err) {
@@ -337,5 +523,23 @@ export class RebalanceEngine {
       lastRebalanceTime: this.lastRebalanceTime,
     });
     stateStore.save();
+  }
+
+  /**
+   * Estimate total portfolio value using token1 as the base unit.
+   * For stablecoin pairs (USDT/ZCHF), this approximates USD value.
+   * price = token0/token1 ratio from the pool tick.
+   */
+  private estimatePortfolioValue(
+    balance0: BigNumber,
+    balance1: BigNumber,
+    decimals0: number,
+    decimals1: number,
+    price: number,
+  ): number {
+    const bal0 = parseFloat(balance0.toString()) / Math.pow(10, decimals0);
+    const bal1 = parseFloat(balance1.toString()) / Math.pow(10, decimals1);
+    // price = how much token1 per token0
+    return bal0 * price + bal1;
   }
 }

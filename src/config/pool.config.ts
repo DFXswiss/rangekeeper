@@ -13,6 +13,7 @@ const chainSchema = z.object({
   name: z.string().min(1),
   chainId: z.number().int().positive(),
   rpcUrl: z.string(),
+  backupRpcUrls: z.array(z.string()).optional().default([]),
 });
 
 const poolSchema = z.object({
@@ -31,6 +32,8 @@ const strategySchema = z.object({
   minRebalanceIntervalMinutes: z.number().nonnegative(),
   maxGasCostUsd: z.number().positive(),
   slippageTolerancePercent: z.number().positive().max(5),
+  expectedPriceRatio: z.number().positive().optional(),
+  depegThresholdPercent: z.number().positive().max(50).optional(),
 });
 
 const monitoringSchema = z.object({
@@ -56,21 +59,40 @@ export type StrategyConfig = z.infer<typeof strategySchema>;
 export type MonitoringConfig = z.infer<typeof monitoringSchema>;
 export type PoolEntry = z.infer<typeof poolConfigSchema>;
 
-function resolveEnvVars(value: string): string {
-  return value.replace(/\$\{(\w+)\}/g, (_, key) => {
+const UNRESOLVED = Symbol('unresolved');
+
+function resolveEnvVars(value: string, optional = false): string | typeof UNRESOLVED {
+  let unresolved = false;
+  const resolved = value.replace(/\$\{(\w+)\}/g, (match, key) => {
     const envVal = process.env[key];
-    if (!envVal) throw new Error(`Environment variable ${key} is not set (referenced in pools.yaml)`);
+    if (!envVal) {
+      if (optional) {
+        unresolved = true;
+        return match;
+      }
+      throw new Error(`Environment variable ${key} is not set (referenced in pools.yaml)`);
+    }
     return envVal;
   });
+  return unresolved ? UNRESOLVED : resolved;
 }
 
-function deepResolveEnvVars(obj: unknown): unknown {
-  if (typeof obj === 'string') return resolveEnvVars(obj);
-  if (Array.isArray(obj)) return obj.map(deepResolveEnvVars);
+function deepResolveEnvVars(obj: unknown, parentKey?: string): unknown {
+  const isOptionalArray = parentKey === 'backupRpcUrls';
+
+  if (typeof obj === 'string') {
+    const result = resolveEnvVars(obj, isOptionalArray);
+    return result === UNRESOLVED ? undefined : result;
+  }
+  if (Array.isArray(obj)) {
+    return obj
+      .map((item) => deepResolveEnvVars(item, parentKey))
+      .filter((item) => item !== undefined);
+  }
   if (obj !== null && typeof obj === 'object') {
     const result: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj)) {
-      result[k] = deepResolveEnvVars(v);
+      result[k] = deepResolveEnvVars(v, k);
     }
     return result;
   }
