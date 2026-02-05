@@ -20,8 +20,8 @@ export class TelegramNotifier implements Notifier {
       parse_mode: 'Markdown',
     });
 
-    return new Promise((resolve, _reject) => {
-      const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
+    return new Promise((resolve) => {
+      const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 10_000 }, (res) => {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
         res.on('end', () => {
@@ -29,14 +29,20 @@ export class TelegramNotifier implements Notifier {
             resolve();
           } else {
             this.logger.warn({ statusCode: res.statusCode, response: data }, 'Telegram notification failed');
-            resolve(); // Don't fail the bot on notification errors
+            resolve();
           }
         });
       });
 
+      req.on('timeout', () => {
+        this.logger.warn('Telegram notification timed out after 10s');
+        req.destroy();
+        resolve();
+      });
+
       req.on('error', (err) => {
         this.logger.warn({ err }, 'Telegram notification error');
-        resolve(); // Don't fail the bot
+        resolve();
       });
 
       req.write(body);

@@ -8,49 +8,50 @@ export interface GasInfo {
   isEip1559: boolean;
 }
 
-let baselineGasPrice: number | undefined;
+export class GasOracle {
+  private readonly logger = getLogger();
+  private baselineGasPrice: number | undefined;
 
-export async function getGasInfo(provider: providers.JsonRpcProvider): Promise<GasInfo> {
-  const logger = getLogger();
+  async getGasInfo(provider: providers.JsonRpcProvider): Promise<GasInfo> {
+    try {
+      const feeData = await provider.getFeeData();
 
-  try {
-    const feeData = await provider.getFeeData();
+      if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+        const info: GasInfo = {
+          gasPriceGwei: parseFloat(utils.formatUnits(feeData.maxFeePerGas, 'gwei')),
+          maxFeePerGasGwei: parseFloat(utils.formatUnits(feeData.maxFeePerGas, 'gwei')),
+          maxPriorityFeePerGasGwei: parseFloat(utils.formatUnits(feeData.maxPriorityFeePerGas, 'gwei')),
+          isEip1559: true,
+        };
+        this.updateBaseline(info.gasPriceGwei);
+        return info;
+      }
 
-    if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+      const gasPrice = feeData.gasPrice ?? (await provider.getGasPrice());
       const info: GasInfo = {
-        gasPriceGwei: parseFloat(utils.formatUnits(feeData.maxFeePerGas, 'gwei')),
-        maxFeePerGasGwei: parseFloat(utils.formatUnits(feeData.maxFeePerGas, 'gwei')),
-        maxPriorityFeePerGasGwei: parseFloat(utils.formatUnits(feeData.maxPriorityFeePerGas, 'gwei')),
-        isEip1559: true,
+        gasPriceGwei: parseFloat(utils.formatUnits(gasPrice, 'gwei')),
+        isEip1559: false,
       };
-      updateBaseline(info.gasPriceGwei);
+      this.updateBaseline(info.gasPriceGwei);
       return info;
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to fetch gas info');
+      throw err;
     }
-
-    const gasPrice = feeData.gasPrice ?? (await provider.getGasPrice());
-    const info: GasInfo = {
-      gasPriceGwei: parseFloat(utils.formatUnits(gasPrice, 'gwei')),
-      isEip1559: false,
-    };
-    updateBaseline(info.gasPriceGwei);
-    return info;
-  } catch (err) {
-    logger.error({ err }, 'Failed to fetch gas info');
-    throw err;
   }
-}
 
-function updateBaseline(currentGwei: number): void {
-  if (!baselineGasPrice) {
-    baselineGasPrice = currentGwei;
-  } else {
-    baselineGasPrice = baselineGasPrice * 0.95 + currentGwei * 0.05;
+  private updateBaseline(currentGwei: number): void {
+    if (!this.baselineGasPrice) {
+      this.baselineGasPrice = currentGwei;
+    } else {
+      this.baselineGasPrice = this.baselineGasPrice * 0.95 + currentGwei * 0.05;
+    }
   }
-}
 
-export function isGasSpike(currentGwei: number, multiplier = 10): boolean {
-  if (!baselineGasPrice) return false;
-  return currentGwei > baselineGasPrice * multiplier;
+  isGasSpike(currentGwei: number, multiplier = 10): boolean {
+    if (!this.baselineGasPrice) return false;
+    return currentGwei > this.baselineGasPrice * multiplier;
+  }
 }
 
 export function estimateGasCostUsd(gasUsed: number, gasPriceGwei: number, ethPriceUsd: number): number {

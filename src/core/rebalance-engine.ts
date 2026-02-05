@@ -15,7 +15,7 @@ import { Notifier } from '../notification/notifier';
 import { updatePoolStatus } from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
-import { getGasInfo, isGasSpike, estimateGasCostUsd } from '../chain/gas-oracle';
+import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
 import { tickToPrice } from '../util/tick-math';
 import { Wallet } from 'ethers';
 
@@ -34,6 +34,7 @@ export interface RebalanceContext {
   slippageGuard: SlippageGuard;
   ilTracker: ILTracker;
   balanceTracker: BalanceTracker;
+  gasOracle: GasOracle;
   stateStore: StateStore;
   historyLogger: HistoryLogger;
   notifier: Notifier;
@@ -223,14 +224,14 @@ export class RebalanceEngine {
   }
 
   private async checkGasCost(isOutOfRange: boolean): Promise<boolean> {
-    const { poolEntry, wallet } = this.ctx;
+    const { poolEntry, wallet, gasOracle } = this.ctx;
     const { strategy } = poolEntry;
 
     try {
-      const provider = wallet.provider;
-      const gasInfo = await getGasInfo(provider as providers.JsonRpcProvider);
+      const provider = wallet.provider as providers.JsonRpcProvider;
+      const gasInfo = await gasOracle.getGasInfo(provider);
 
-      if (isGasSpike(gasInfo.gasPriceGwei)) {
+      if (gasOracle.isGasSpike(gasInfo.gasPriceGwei)) {
         this.logger.warn({ gasPriceGwei: gasInfo.gasPriceGwei }, 'Gas spike detected');
         if (!isOutOfRange) {
           this.logger.info('Skipping rebalance due to gas spike (still in range)');
@@ -415,13 +416,33 @@ export class RebalanceEngine {
       );
 
       if (swapPlan && swapPlan.amountIn.gt(0)) {
-        await swapExecutor.executeSwap(
+        const swapAmountOut = await swapExecutor.executeSwap(
           swapPlan.tokenIn,
           swapPlan.tokenOut,
           pool.feeTier,
           swapPlan.amountIn,
           strategy.slippageTolerancePercent,
         );
+
+        // Validate swap slippage using pool price as expected rate
+        const swapPrice = tickToPrice(freshState.tick);
+        const inDecimals = swapPlan.tokenIn.toLowerCase() === pool.token0.address.toLowerCase() ? pool.token0.decimals : pool.token1.decimals;
+        const outDecimals = swapPlan.tokenOut.toLowerCase() === pool.token0.address.toLowerCase() ? pool.token0.decimals : pool.token1.decimals;
+        // expectedPrice = how much outToken per inToken
+        const isToken0In = swapPlan.tokenIn.toLowerCase() === pool.token0.address.toLowerCase();
+        const expectedSwapPrice = isToken0In ? swapPrice : 1 / swapPrice;
+
+        if (!this.ctx.slippageGuard.checkSlippage(swapPlan.amountIn, swapAmountOut, inDecimals, outDecimals, expectedSwapPrice)) {
+          this.logger.error(
+            { amountIn: swapPlan.amountIn.toString(), amountOut: swapAmountOut.toString(), expectedSwapPrice },
+            'Post-swap slippage check failed, continuing with available balances',
+          );
+          await notifier.notify(
+            `WARNING: High slippage detected on swap for ${poolEntry.id}\n` +
+              `AmountIn: ${swapPlan.amountIn.toString()}\n` +
+              `AmountOut: ${swapAmountOut.toString()}`,
+          );
+        }
       }
 
       // STEP 4: Mint new position
@@ -457,8 +478,8 @@ export class RebalanceEngine {
       // Post-rebalance value check
       const postValue = this.estimatePortfolioValue(newBalance0, newBalance1, pool.token0.decimals, pool.token1.decimals, currentPrice);
 
-      // Check single-rebalance loss (>2% → pause + alert)
-      if (preValue > 0 && emergencyStop.checkRebalanceLoss(preValue, postValue)) {
+      // Check single-rebalance loss (>2% → pause + alert), skip if values are invalid
+      if (preValue > 0 && postValue > 0 && emergencyStop.checkRebalanceLoss(preValue, postValue)) {
         await notifier.notify(
           `ALERT: Rebalance loss too high for ${poolEntry.id}!\n` +
             `Pre: $${preValue.toFixed(2)} → Post: $${postValue.toFixed(2)}\n` +
@@ -564,9 +585,18 @@ export class RebalanceEngine {
     decimals1: number,
     price: number,
   ): number {
+    if (!Number.isFinite(price) || price <= 0) {
+      this.logger.error({ price }, 'Invalid price for portfolio estimation, returning 0');
+      return 0;
+    }
     const bal0 = parseFloat(balance0.toString()) / Math.pow(10, decimals0);
     const bal1 = parseFloat(balance1.toString()) / Math.pow(10, decimals1);
     // price = how much token1 per token0
-    return bal0 * price + bal1;
+    const value = bal0 * price + bal1;
+    if (!Number.isFinite(value)) {
+      this.logger.error({ bal0, bal1, price, value }, 'Portfolio value calculation produced non-finite result');
+      return 0;
+    }
+    return value;
   }
 }

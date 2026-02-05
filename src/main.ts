@@ -17,6 +17,7 @@ import { HistoryLogger } from './persistence/history-logger';
 import { CompositeNotifier, ConsoleNotifier, Notifier } from './notification/notifier';
 import { TelegramNotifier } from './notification/telegram-notifier';
 import { DiscordNotifier } from './notification/discord-notifier';
+import { GasOracle } from './chain/gas-oracle';
 import { startHealthServer } from './health/health-server';
 
 const engines: RebalanceEngine[] = [];
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
       const emergencyStop = new EmergencyStop();
       const slippageGuard = new SlippageGuard(poolEntry.strategy.slippageTolerancePercent);
       const ilTracker = new ILTracker();
+      const gasOracle = new GasOracle();
       const balanceTracker = new BalanceTracker(() => wallet);
 
       // Register failover callback to rebuild contracts with new provider
@@ -132,6 +134,7 @@ async function main(): Promise<void> {
         slippageGuard,
         ilTracker,
         balanceTracker,
+        gasOracle,
         stateStore,
         historyLogger,
         notifier,

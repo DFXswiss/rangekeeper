@@ -24,6 +24,7 @@ export class DiscordNotifier implements Notifier {
           path: url.pathname,
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          timeout: 10_000,
         },
         (res) => {
           let data = '';
@@ -38,6 +39,12 @@ export class DiscordNotifier implements Notifier {
           });
         },
       );
+
+      req.on('timeout', () => {
+        this.logger.warn('Discord notification timed out after 10s');
+        req.destroy();
+        resolve();
+      });
 
       req.on('error', (err) => {
         this.logger.warn({ err }, 'Discord notification error');
