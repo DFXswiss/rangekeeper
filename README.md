@@ -1,15 +1,39 @@
 # RangeKeeper
 
-Autonomous Uniswap V3 Concentrated Liquidity Management Bot. Platziert Liquidität in einer engen Price Range (±2-5%) um den aktuellen Marktpreis und repositioniert automatisch wenn sich der Preis bewegt.
+Autonomous Uniswap V3 Liquidity Provisioning Bot. Ensures that a specific token (e.g. ZCHF) is always liquid and tradeable on decentralized exchanges.
 
-**Ziel:** Kapitalerhalt (~$200k bleiben ~$200k), nicht Gewinnmaximierung.
+## Why does this project exist?
+
+For a token to be meaningfully tradeable on a DEX, it needs liquidity. Without sufficient liquidity near the current price, trades suffer from high slippage or are simply not possible. RangeKeeper solves this by permanently providing Concentrated Liquidity within a tight price range (±2-5%) around the current market price.
+
+**The goal is not profit maximization — the goal is tradeability.**
+
+The bot is an autonomous market maker for a specific token.
+
+## How does it work?
+
+RangeKeeper is a **self-contained economic system**:
+
+1. **One-time funding** — The wallet is funded once with both tokens of the pair (e.g. USDT + ZCHF). No additional capital is ever injected.
+
+2. **Autonomous repositioning** — The bot places the tokens as a Concentrated Liquidity position on Uniswap V3. When the price moves and the position falls out of range, the bot withdraws the liquidity, rebalances the token ratio via a swap, and opens a new position centered around the current price.
+
+3. **Closed loop** — The tokens never leave the system. They are continuously recycled in an endless loop:
+
+   ```
+   Position → Withdraw → Swap (adjust ratio) → new Position → ...
+   ```
+
+   Accrued trading fees flow back into the next position. The total capital stays within the system — only the ratio between the two tokens changes depending on the current market price.
+
+4. **Unlimited runtime** — As long as the token price moves within an economically reasonable range, the bot can theoretically run indefinitely. There are no external dependencies, no capital injections, no manual intervention required.
 
 ## Setup
 
-### Voraussetzungen
+### Prerequisites
 
 - Node.js 20+
-- Docker (für Produktion)
+- Docker (for production)
 
 ### Installation
 
@@ -18,25 +42,26 @@ npm install
 cp .env.example .env
 ```
 
-### Konfiguration
+### Configuration
 
 #### `.env`
 
-| Variable | Beschreibung | Pflicht |
-|----------|-------------|---------|
-| `PRIVATE_KEY` | Wallet Private Key (0x...) | Ja |
-| `ETHEREUM_RPC_URL` | Ethereum RPC Endpoint | Je nach Pool |
-| `POLYGON_RPC_URL` | Polygon RPC Endpoint | Je nach Pool |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | Nein |
-| `TELEGRAM_CHAT_ID` | Telegram Chat ID | Nein |
-| `DISCORD_WEBHOOK_URL` | Discord Webhook URL | Nein |
-| `LOG_LEVEL` | Log Level (trace/debug/info/warn/error) | Nein (default: info) |
-| `HEALTH_PORT` | Health Server Port | Nein (default: 3000) |
-| `MAX_TOTAL_LOSS_PERCENT` | Max Portfolio-Verlust bevor Bot stoppt | Nein (default: 10) |
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `PRIVATE_KEY` | Wallet Private Key (0x...) | Yes |
+| `ETHEREUM_RPC_URL` | Ethereum RPC Endpoint | Depends on pool |
+| `POLYGON_RPC_URL` | Polygon RPC Endpoint | Depends on pool |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | No |
+| `TELEGRAM_CHAT_ID` | Telegram Chat ID | No |
+| `DISCORD_WEBHOOK_URL` | Discord Webhook URL | No |
+| `LOG_LEVEL` | Log Level (trace/debug/info/warn/error) | No (default: info) |
+| `HEALTH_PORT` | Health Server Port | No (default: 3000) |
+| `DRY_RUN` | Simulate without on-chain writes (true/false) | No (default: false) |
+| `MAX_TOTAL_LOSS_PERCENT` | Max portfolio loss before bot stops | No (default: 10) |
 
 #### `config/pools.yaml`
 
-Pool-Konfigurationen mit Token-Adressen, Fee Tier, Strategy-Parametern und Monitoring-Intervallen. Umgebungsvariablen können mit `${VAR_NAME}` referenziert werden.
+Pool configurations with token addresses, fee tier, strategy parameters and monitoring intervals. Environment variables can be referenced with `${VAR_NAME}`.
 
 ```yaml
 pools:
@@ -58,16 +83,16 @@ pools:
       nftManagerAddress: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
       swapRouterAddress: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
     strategy:
-      rangeWidthPercent: 3.0            # ±1.5% um aktuellen Preis
-      rebalanceThresholdPercent: 80      # Rebalance bei 80% der Range
-      minRebalanceIntervalMinutes: 30    # Min. 30 Min zwischen Rebalances
-      maxGasCostUsd: 5.0                 # Max Gas-Kosten pro Rebalance
-      slippageTolerancePercent: 0.5      # Max Slippage
+      rangeWidthPercent: 3.0            # ±1.5% around current price
+      rebalanceThresholdPercent: 80      # rebalance at 80% of range
+      minRebalanceIntervalMinutes: 30    # min 30 min between rebalances
+      maxGasCostUsd: 5.0                 # max gas cost per rebalance
+      slippageTolerancePercent: 0.5      # max slippage
     monitoring:
-      checkIntervalSeconds: 30           # Pool-Preis alle 30s prüfen
+      checkIntervalSeconds: 30           # poll pool price every 30s
 ```
 
-## Betrieb
+## Running
 
 ### Development
 
@@ -75,7 +100,7 @@ pools:
 npm run dev
 ```
 
-### Produktion (Docker)
+### Production (Docker)
 
 ```bash
 docker compose up -d
@@ -94,7 +119,7 @@ npm start
 npm test
 ```
 
-## Architektur
+## Architecture
 
 ### Rebalance State Machine
 
@@ -102,52 +127,53 @@ npm test
 IDLE → MONITORING → EVALUATING → WITHDRAWING → SWAPPING → MINTING → MONITORING
 ```
 
-**Rebalance wird getriggert wenn:**
-- Preis 80% der Range-Grenze erreicht (konfigurierbar)
-- Preis komplett out of range ist
+**Rebalance is triggered when:**
+- Price reaches 80% of the range boundary (configurable)
+- Price is completely out of range
 
-**Rebalance wird übersprungen wenn:**
-- Gas-Kosten zu hoch UND nicht komplett out of range
-- Min. Intervall seit letztem Rebalance nicht erreicht
+**Rebalance is skipped when:**
+- Gas cost too high AND not completely out of range
+- Minimum interval since last rebalance not yet reached
 
-**Rebalance-Ablauf:**
+**Rebalance flow:**
 1. `decreaseLiquidity()` + `collect()` + `burn()`
-2. Neuen Pool State lesen, neue Range berechnen
-3. Token-Ratio berechnen, ggf. Swap
-4. `mint()` mit neuer Range
-5. State persistieren, Notification senden
+2. Fetch fresh pool state, calculate new range
+3. Calculate token ratio, swap if needed
+4. `mint()` with new range
+5. Persist state, send notification
 
 ### Risk Management
 
-| Bedingung | Schwelle | Aktion |
-|-----------|----------|--------|
-| Portfolio-Wertverlust | >10% vom Start | Position schliessen, Bot stoppen |
-| Einzelner Rebalance-Verlust | >2% | Pausieren, Alert |
-| Konsekutive TX-Fehler | >3 in Folge | Pausieren, Alert |
-| Gas-Spike | >10x normal | Rebalancing pausieren |
+| Condition | Threshold | Action |
+|-----------|-----------|--------|
+| Portfolio value loss | >10% from start | Close position, stop bot |
+| Single rebalance loss | >2% | Pause, alert |
+| Consecutive TX errors | >3 in a row | Pause, alert |
+| Gas spike | >10x normal | Pause rebalancing |
+| Token depeg | >5% from expected price | Emergency withdraw, stop bot |
 
 ### Health Endpoints
 
-- `GET /health` — Liveness Check
-- `GET /status` — Detaillierter Bot-Status mit allen Pool-Positionen
+- `GET /health` — Liveness check
+- `GET /status` — Detailed bot status with all pool positions
 
-## Projektstruktur
+## Project Structure
 
 ```
 src/
-├── main.ts                     # Entry Point, Multi-Pool Loop, Graceful Shutdown
-├── config/                     # Env Validation (zod), YAML Pool Config, Chain Addresses
+├── main.ts                     # Entry point, multi-pool loop, graceful shutdown
+├── config/                     # Env validation (zod), YAML pool config, chain addresses
 ├── core/
-│   ├── pool-monitor.ts         # Pollt Pool-Preis, erkennt Out-of-Range
-│   ├── position-manager.ts     # Mint, Remove, Collect, Burn via NFT Manager
-│   ├── range-calculator.ts     # Berechnet optimale Tick Range
-│   ├── rebalance-engine.ts     # State Machine, Orchestrierung
-│   └── balance-tracker.ts      # Portfolio-Wert Tracking
-├── chain/                      # ethers.js Provider, Contract Factories, Gas Oracle
-├── swap/                       # Token Swaps via SwapRouter02, Ratio Berechnung
-├── risk/                       # Emergency Stop, Slippage Guard, IL Tracker
-├── notification/               # Telegram, Discord, Console Notifier
-├── persistence/                # State (JSON), History (JSONL)
+│   ├── pool-monitor.ts         # Polls pool price, detects out-of-range
+│   ├── position-manager.ts     # Mint, remove, collect, burn via NFT Manager
+│   ├── range-calculator.ts     # Calculates optimal tick range
+│   ├── rebalance-engine.ts     # State machine, orchestration
+│   └── balance-tracker.ts      # Portfolio value tracking
+├── chain/                      # ethers.js provider, contract factories, gas oracle
+├── swap/                       # Token swaps via SwapRouter02, ratio calculation
+├── risk/                       # Emergency stop, slippage guard, IL tracker
+├── notification/               # Telegram, Discord, console notifier
+├── persistence/                # State (JSON), history (JSONL)
 ├── health/                     # Express /health + /status
-└── util/                       # Logger (pino), Retry, Tick Math, Formatting
+└── util/                       # Logger (pino), retry, tick math, formatting
 ```
