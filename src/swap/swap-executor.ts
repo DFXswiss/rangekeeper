@@ -1,17 +1,37 @@
-import { Contract, BigNumber, Wallet, ContractTransaction } from 'ethers';
+import { Contract, BigNumber, Wallet, ContractTransaction, constants } from 'ethers';
 import { getLogger } from '../util/logger';
 import { getSwapRouterContract, getErc20Contract, ensureApproval } from '../chain/contracts';
 import { withRetry } from '../util/retry';
 
+export type WalletProvider = () => Wallet;
+
 export class SwapExecutor {
   private readonly logger = getLogger();
-  private readonly router: Contract;
 
   constructor(
-    private readonly wallet: Wallet,
+    private readonly getWallet: WalletProvider,
     private readonly swapRouterAddress: string,
-  ) {
-    this.router = getSwapRouterContract(swapRouterAddress, wallet);
+  ) {}
+
+  private get wallet(): Wallet {
+    return this.getWallet();
+  }
+
+  private get router(): Contract {
+    return getSwapRouterContract(this.swapRouterAddress, this.wallet);
+  }
+
+  async approveTokens(token0Address: string, token1Address: string): Promise<void> {
+    const w = this.wallet;
+    const token0 = getErc20Contract(token0Address, w);
+    const token1 = getErc20Contract(token1Address, w);
+
+    await Promise.all([
+      ensureApproval(token0, this.swapRouterAddress, w.address, constants.MaxUint256),
+      ensureApproval(token1, this.swapRouterAddress, w.address, constants.MaxUint256),
+    ]);
+
+    this.logger.info('Token approvals confirmed for Swap Router');
   }
 
   async executeSwap(
@@ -21,14 +41,13 @@ export class SwapExecutor {
     amountIn: BigNumber,
     slippagePercent: number,
   ): Promise<BigNumber> {
+    const w = this.wallet;
+    const router = this.router;
+
     this.logger.info(
       { tokenIn, tokenOut, feeTier, amountIn: amountIn.toString(), slippagePercent },
       'Executing swap',
     );
-
-    // Ensure approval
-    const tokenInContract = getErc20Contract(tokenIn, this.wallet);
-    await ensureApproval(tokenInContract, this.swapRouterAddress, this.wallet.address, amountIn);
 
     // For stablecoin pairs, we expect ~1:1 ratio, so min out is based on slippage
     const slippageMul = Math.floor((1 - slippagePercent / 100) * 10000);
@@ -36,11 +55,11 @@ export class SwapExecutor {
 
     const tx: ContractTransaction = await withRetry(
       () =>
-        this.router.exactInputSingle({
+        router.exactInputSingle({
           tokenIn,
           tokenOut,
           fee: feeTier,
-          recipient: this.wallet.address,
+          recipient: w.address,
           amountIn,
           amountOutMinimum,
           sqrtPriceLimitX96: 0,

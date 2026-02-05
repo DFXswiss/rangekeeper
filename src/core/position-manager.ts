@@ -3,6 +3,8 @@ import { getLogger } from '../util/logger';
 import { getNftManagerContract, getErc20Contract, ensureApproval } from '../chain/contracts';
 import { withRetry } from '../util/retry';
 
+export type WalletProvider = () => Wallet;
+
 export interface MintParams {
   token0: string;
   token1: string;
@@ -43,22 +45,28 @@ export interface PositionInfo {
 
 export class PositionManager {
   private readonly logger = getLogger();
-  private readonly nftManager: Contract;
 
   constructor(
-    private readonly wallet: Wallet,
+    private readonly getWallet: WalletProvider,
     private readonly nftManagerAddress: string,
-  ) {
-    this.nftManager = getNftManagerContract(nftManagerAddress, wallet);
+  ) {}
+
+  private get wallet(): Wallet {
+    return this.getWallet();
+  }
+
+  private get nftManager(): Contract {
+    return getNftManagerContract(this.nftManagerAddress, this.wallet);
   }
 
   async approveTokens(token0Address: string, token1Address: string): Promise<void> {
-    const token0 = getErc20Contract(token0Address, this.wallet);
-    const token1 = getErc20Contract(token1Address, this.wallet);
+    const w = this.wallet;
+    const token0 = getErc20Contract(token0Address, w);
+    const token1 = getErc20Contract(token1Address, w);
 
     await Promise.all([
-      ensureApproval(token0, this.nftManagerAddress, this.wallet.address, constants.MaxUint256),
-      ensureApproval(token1, this.nftManagerAddress, this.wallet.address, constants.MaxUint256),
+      ensureApproval(token0, this.nftManagerAddress, w.address, constants.MaxUint256),
+      ensureApproval(token1, this.nftManagerAddress, w.address, constants.MaxUint256),
     ]);
 
     this.logger.info('Token approvals confirmed for NFT Manager');
@@ -80,9 +88,10 @@ export class PositionManager {
       'Minting new position',
     );
 
+    const nftManager = this.nftManager;
     const tx: ContractTransaction = await withRetry(
       () =>
-        this.nftManager.mint({
+        nftManager.mint({
           token0: params.token0,
           token1: params.token1,
           fee: params.fee,
@@ -118,13 +127,15 @@ export class PositionManager {
 
   async removePosition(tokenId: BigNumber, liquidity: BigNumber, slippagePercent: number): Promise<RemoveResult> {
     const deadline = Math.floor(Date.now() / 1000) + 300;
+    const w = this.wallet;
+    const nftManager = this.nftManager;
 
     this.logger.info({ tokenId: tokenId.toString(), liquidity: liquidity.toString() }, 'Removing position');
 
     // Step 1: Decrease liquidity
     const decreaseTx: ContractTransaction = await withRetry(
       () =>
-        this.nftManager.decreaseLiquidity({
+        nftManager.decreaseLiquidity({
           tokenId,
           liquidity,
           amount0Min: 0,
@@ -140,9 +151,9 @@ export class PositionManager {
     const maxUint128 = BigNumber.from(2).pow(128).sub(1);
     const collectTx: ContractTransaction = await withRetry(
       () =>
-        this.nftManager.collect({
+        nftManager.collect({
           tokenId,
-          recipient: this.wallet.address,
+          recipient: w.address,
           amount0Max: maxUint128,
           amount1Max: maxUint128,
         }),
@@ -157,7 +168,7 @@ export class PositionManager {
     const totalAmount1 = collectEvent?.args?.amount1 ?? BigNumber.from(0);
 
     // Step 3: Burn the NFT
-    const burnTx: ContractTransaction = await withRetry(() => this.nftManager.burn(tokenId), 'burn');
+    const burnTx: ContractTransaction = await withRetry(() => nftManager.burn(tokenId), 'burn');
     await burnTx.wait();
 
     const result: RemoveResult = {
@@ -182,8 +193,9 @@ export class PositionManager {
   }
 
   async getPosition(tokenId: BigNumber): Promise<PositionInfo> {
+    const nftManager = this.nftManager;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pos: any = await withRetry(() => this.nftManager.positions(tokenId), 'getPosition');
+    const pos: any = await withRetry(() => nftManager.positions(tokenId), 'getPosition');
 
     return {
       tokenId,
@@ -204,11 +216,12 @@ export class PositionManager {
     token1: string,
     fee: number,
   ): Promise<PositionInfo[]> {
-    const balance: BigNumber = await this.nftManager.balanceOf(ownerAddress);
+    const nftManager = this.nftManager;
+    const balance: BigNumber = await nftManager.balanceOf(ownerAddress);
     const positions: PositionInfo[] = [];
 
     for (let i = 0; i < balance.toNumber(); i++) {
-      const tokenId: BigNumber = await this.nftManager.tokenOfOwnerByIndex(ownerAddress, i);
+      const tokenId: BigNumber = await nftManager.tokenOfOwnerByIndex(ownerAddress, i);
       const pos = await this.getPosition(tokenId);
 
       if (

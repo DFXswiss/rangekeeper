@@ -80,12 +80,12 @@ async function main(): Promise<void> {
 
       let poolContract = getPoolContract(poolAddress, wallet);
       const poolMonitor = new PoolMonitor(poolContract, poolEntry.id, poolEntry.monitoring.checkIntervalSeconds * 1000);
-      const positionManager = new PositionManager(wallet, poolEntry.pool.nftManagerAddress);
-      const swapExecutor = new SwapExecutor(wallet, poolEntry.pool.swapRouterAddress);
+      const positionManager = new PositionManager(() => wallet, poolEntry.pool.nftManagerAddress);
+      const swapExecutor = new SwapExecutor(() => wallet, poolEntry.pool.swapRouterAddress);
       const emergencyStop = new EmergencyStop();
       const slippageGuard = new SlippageGuard(poolEntry.strategy.slippageTolerancePercent);
       const ilTracker = new ILTracker();
-      const balanceTracker = new BalanceTracker(wallet);
+      const balanceTracker = new BalanceTracker(() => wallet);
 
       // Register failover callback to rebuild contracts with new provider
       failoverProvider.setFailoverCallback((fromUrl, toUrl, newProvider) => {

@@ -102,8 +102,9 @@ export class RebalanceEngine {
       }
     }
 
-    // Ensure token approvals
+    // Ensure token approvals for both NFT manager and swap router
     await positionManager.approveTokens(pool.token0.address, pool.token1.address);
+    await this.ctx.swapExecutor.approveTokens(pool.token0.address, pool.token1.address);
 
     this.setState('MONITORING');
   }

@@ -3,6 +3,8 @@ import { getLogger } from '../util/logger';
 import { getErc20Contract } from '../chain/contracts';
 import { formatTokenAmount } from '../util/format';
 
+export type WalletProvider = () => Wallet;
+
 export interface TokenBalance {
   symbol: string;
   address: string;
@@ -25,11 +27,16 @@ export class BalanceTracker {
   private initialValueUsd?: number;
   private snapshots: PortfolioSnapshot[] = [];
 
-  constructor(private readonly wallet: Wallet) {}
+  constructor(private readonly getWallet: WalletProvider) {}
+
+  private get wallet(): Wallet {
+    return this.getWallet();
+  }
 
   async getTokenBalance(tokenAddress: string, symbol: string, decimals: number): Promise<TokenBalance> {
-    const contract = getErc20Contract(tokenAddress, this.wallet);
-    const balance: BigNumber = await contract.balanceOf(this.wallet.address);
+    const w = this.wallet;
+    const contract = getErc20Contract(tokenAddress, w);
+    const balance: BigNumber = await contract.balanceOf(w.address);
 
     return {
       symbol,
