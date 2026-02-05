@@ -20,7 +20,7 @@ export class TelegramNotifier implements Notifier {
       parse_mode: 'Markdown',
     });
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, _reject) => {
       const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
         let data = '';
         res.on('data', (chunk) => (data += chunk));

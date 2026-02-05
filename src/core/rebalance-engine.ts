@@ -1,7 +1,7 @@
-import { BigNumber } from 'ethers';
+import { BigNumber, providers } from 'ethers';
 import { getLogger } from '../util/logger';
 import { PoolMonitor, PoolState, PositionRange } from './pool-monitor';
-import { PositionManager, MintResult, RemoveResult } from './position-manager';
+import { PositionManager, RemoveResult } from './position-manager';
 import { calculateRange, shouldRebalance, isInRange } from './range-calculator';
 import { calculateSwap } from '../swap/ratio-calculator';
 import { SwapExecutor } from '../swap/swap-executor';
@@ -48,8 +48,13 @@ export class RebalanceEngine {
   private currentRange?: PositionRange;
   private lastRebalanceTime = 0;
   private consecutiveErrors = 0;
+  private rebalanceLock = false;
 
   constructor(private readonly ctx: RebalanceContext) {}
+
+  isRebalancing(): boolean {
+    return this.rebalanceLock;
+  }
 
   getState(): RebalanceState {
     return this.state;
@@ -179,6 +184,7 @@ export class RebalanceEngine {
 
     if (!this.currentTokenId) return;
 
+    this.rebalanceLock = true;
     this.setState('WITHDRAWING');
     try {
       const pos = await positionManager.getPosition(this.currentTokenId);
@@ -192,11 +198,25 @@ export class RebalanceEngine {
         tokenId: this.currentTokenId.toString(),
       });
 
+      await notifier.notify(
+        `EMERGENCY: Position closed for ${poolEntry.id}\n` +
+          `TokenId: ${this.currentTokenId.toString()}\n` +
+          `Reason: ${this.ctx.emergencyStop.getReason() ?? 'unknown'}\n` +
+          `Action: bot stopped, manual intervention required`,
+      );
+
       this.currentTokenId = undefined;
       this.currentRange = undefined;
       this.persistState(stateStore, poolEntry.id);
     } catch (err) {
       this.logger.error({ err }, 'Emergency withdraw failed');
+      await notifier.notify(
+        `CRITICAL: Emergency withdraw FAILED for ${poolEntry.id}!\n` +
+          `Error: ${err instanceof Error ? err.message : String(err)}\n` +
+          `Manual intervention required immediately`,
+      ).catch(() => {});
+    } finally {
+      this.rebalanceLock = false;
     }
 
     this.setState('STOPPED');
@@ -208,7 +228,7 @@ export class RebalanceEngine {
 
     try {
       const provider = wallet.provider;
-      const gasInfo = await getGasInfo(provider as any);
+      const gasInfo = await getGasInfo(provider as providers.JsonRpcProvider);
 
       if (isGasSpike(gasInfo.gasPriceGwei)) {
         this.logger.warn({ gasPriceGwei: gasInfo.gasPriceGwei }, 'Gas spike detected');
@@ -248,6 +268,7 @@ export class RebalanceEngine {
     const { poolEntry, wallet, positionManager, balanceTracker, ilTracker, stateStore, historyLogger, notifier } = this.ctx;
     const { pool, strategy } = poolEntry;
 
+    this.rebalanceLock = true;
     this.setState('MINTING');
 
     try {
@@ -309,6 +330,8 @@ export class RebalanceEngine {
       this.setState('MONITORING');
     } catch (err) {
       this.handleError('mintInitialPosition', err);
+    } finally {
+      this.rebalanceLock = false;
     }
   }
 
@@ -338,6 +361,7 @@ export class RebalanceEngine {
     const gasOk = await this.checkGasCost(outOfRange);
     if (!gasOk) return;
 
+    this.rebalanceLock = true;
     this.setState('EVALUATING');
     this.logger.info({ poolId: poolEntry.id, tick: poolState.tick, outOfRange }, 'Starting rebalance');
 
@@ -487,6 +511,8 @@ export class RebalanceEngine {
       this.setState('MONITORING');
     } catch (err) {
       this.handleError('executeRebalance', err);
+    } finally {
+      this.rebalanceLock = false;
     }
   }
 

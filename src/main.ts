@@ -57,7 +57,7 @@ async function main(): Promise<void> {
         poolEntry.chain.backupRpcUrls ?? [],
       );
 
-      let provider = failoverProvider.getProvider();
+      const provider = failoverProvider.getProvider();
       let wallet = getWallet(env.PRIVATE_KEY, provider);
 
       const { chainId, blockNumber } = await verifyConnection(provider);
@@ -88,16 +88,38 @@ async function main(): Promise<void> {
       const balanceTracker = new BalanceTracker(() => wallet);
 
       // Register failover callback to rebuild contracts with new provider
+      // Defers if a rebalance is in progress to avoid mixed-provider state
       failoverProvider.setFailoverCallback((fromUrl, toUrl, newProvider) => {
-        logger.warn({ poolId: poolEntry.id, from: fromUrl, to: toUrl }, 'RPC failover: reconnecting contracts');
-        wallet = getWallet(env.PRIVATE_KEY, newProvider);
-        poolContract = getPoolContract(poolAddress, wallet);
-        poolMonitor.setPoolContract(poolContract);
-        // ctx.wallet is used by rebalance engine for on-demand contract creation
-        ctx.wallet = wallet;
-        notifier.notify(
-          `ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`,
-        ).catch(() => {});
+        const applyFailover = () => {
+          logger.warn({ poolId: poolEntry.id, from: fromUrl, to: toUrl }, 'RPC failover: reconnecting contracts');
+          wallet = getWallet(env.PRIVATE_KEY, newProvider);
+          poolContract = getPoolContract(poolAddress, wallet);
+          poolMonitor.setPoolContract(poolContract);
+          ctx.wallet = wallet;
+          notifier.notify(
+            `ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`,
+          ).catch(() => {});
+        };
+
+        if (engine.isRebalancing()) {
+          logger.warn({ poolId: poolEntry.id }, 'RPC failover deferred: rebalance in progress');
+          const deferInterval = setInterval(() => {
+            if (!engine.isRebalancing()) {
+              clearInterval(deferInterval);
+              applyFailover();
+            }
+          }, 1000);
+          // Safety: don't defer forever (30s max)
+          setTimeout(() => {
+            clearInterval(deferInterval);
+            if (engine.isRebalancing()) {
+              logger.error({ poolId: poolEntry.id }, 'RPC failover forced after 30s defer timeout');
+            }
+            applyFailover();
+          }, 30_000);
+        } else {
+          applyFailover();
+        }
       });
 
       const ctx: RebalanceContext = {

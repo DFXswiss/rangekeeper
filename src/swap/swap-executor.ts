@@ -68,6 +68,9 @@ export class SwapExecutor {
     );
 
     const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Swap transaction reverted on-chain');
+    }
 
     // Parse Transfer event from output token to get amountOut
     const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -76,7 +79,15 @@ export class SwapExecutor {
         log.topics[0] === transferTopic && log.address.toLowerCase() === tokenOut.toLowerCase(),
     );
 
-    const amountOut = transferLog ? BigNumber.from(transferLog.data) : BigNumber.from(0);
+    if (!transferLog) {
+      this.logger.error({ txHash: receipt.transactionHash, logsCount: receipt.logs?.length }, 'Transfer event not found in swap receipt');
+      throw new Error(`Swap succeeded but Transfer event not found for output token (tx: ${receipt.transactionHash})`);
+    }
+
+    const amountOut = BigNumber.from(transferLog.data);
+    if (amountOut.isZero()) {
+      throw new Error(`Swap returned amountOut=0 (tx: ${receipt.transactionHash})`);
+    }
 
     this.logger.info(
       { amountIn: amountIn.toString(), amountOut: amountOut.toString(), gasUsed: receipt.gasUsed.toString() },

@@ -1,4 +1,4 @@
-import { Contract, BigNumber, Wallet } from 'ethers';
+import { BigNumber, Wallet } from 'ethers';
 import { getLogger } from '../util/logger';
 import { getErc20Contract } from '../chain/contracts';
 import { formatTokenAmount } from '../util/format';

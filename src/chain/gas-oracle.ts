@@ -1,4 +1,4 @@
-import { providers, BigNumber, utils } from 'ethers';
+import { providers, utils } from 'ethers';
 import { getLogger } from '../util/logger';
 
 export interface GasInfo {

@@ -18,7 +18,7 @@ export interface PoolStatus {
   portfolioValueUsd?: number;
 }
 
-let botStatus: BotStatus = {
+const botStatus: BotStatus = {
   uptime: 0,
   pools: [],
 };

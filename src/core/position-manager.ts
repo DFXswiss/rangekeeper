@@ -108,14 +108,26 @@ export class PositionManager {
     );
 
     const receipt = await tx.wait();
+    if (receipt.status === 0) {
+      throw new Error('Mint transaction reverted on-chain');
+    }
+
     const event = receipt.events?.find((e: { event?: string }) => e.event === 'IncreaseLiquidity');
+    if (!event?.args) {
+      this.logger.error({ txHash: receipt.transactionHash, logs: receipt.logs?.length }, 'IncreaseLiquidity event not found in mint receipt');
+      throw new Error(`Mint succeeded but IncreaseLiquidity event not found (tx: ${receipt.transactionHash})`);
+    }
 
     const result: MintResult = {
-      tokenId: event?.args?.tokenId ?? BigNumber.from(0),
-      liquidity: event?.args?.liquidity ?? BigNumber.from(0),
-      amount0: event?.args?.amount0 ?? BigNumber.from(0),
-      amount1: event?.args?.amount1 ?? BigNumber.from(0),
+      tokenId: event.args.tokenId,
+      liquidity: event.args.liquidity,
+      amount0: event.args.amount0,
+      amount1: event.args.amount1,
     };
+
+    if (result.tokenId.isZero()) {
+      throw new Error(`Mint returned tokenId=0 (tx: ${receipt.transactionHash})`);
+    }
 
     this.logger.info(
       { tokenId: result.tokenId.toString(), liquidity: result.liquidity.toString() },
@@ -130,22 +142,41 @@ export class PositionManager {
     const w = this.wallet;
     const nftManager = this.nftManager;
 
-    this.logger.info({ tokenId: tokenId.toString(), liquidity: liquidity.toString() }, 'Removing position');
+    this.logger.info({ tokenId: tokenId.toString(), liquidity: liquidity.toString(), slippagePercent }, 'Removing position');
 
-    // Step 1: Decrease liquidity
+    // Query expected amounts to calculate slippage-protected minimums
+    const amounts = await nftManager.callStatic.decreaseLiquidity({
+      tokenId,
+      liquidity,
+      amount0Min: 0,
+      amount1Min: 0,
+      deadline,
+    });
+    const slippageMul = Math.floor((1 - slippagePercent / 100) * 10000);
+    const amount0Min = BigNumber.from(amounts.amount0).mul(slippageMul).div(10000);
+    const amount1Min = BigNumber.from(amounts.amount1).mul(slippageMul).div(10000);
+
+    // Step 1: Decrease liquidity with slippage protection
     const decreaseTx: ContractTransaction = await withRetry(
       () =>
         nftManager.decreaseLiquidity({
           tokenId,
           liquidity,
-          amount0Min: 0,
-          amount1Min: 0,
+          amount0Min,
+          amount1Min,
           deadline,
         }),
       'decreaseLiquidity',
     );
     const decreaseReceipt = await decreaseTx.wait();
+    if (decreaseReceipt.status === 0) {
+      throw new Error('decreaseLiquidity transaction reverted on-chain');
+    }
     const decreaseEvent = decreaseReceipt.events?.find((e: { event?: string }) => e.event === 'DecreaseLiquidity');
+    if (!decreaseEvent?.args) {
+      this.logger.error({ txHash: decreaseReceipt.transactionHash }, 'DecreaseLiquidity event not found');
+      throw new Error(`DecreaseLiquidity event not found (tx: ${decreaseReceipt.transactionHash})`);
+    }
 
     // Step 2: Collect all tokens (including fees)
     const maxUint128 = BigNumber.from(2).pow(128).sub(1);
@@ -160,16 +191,26 @@ export class PositionManager {
       'collect',
     );
     const collectReceipt = await collectTx.wait();
+    if (collectReceipt.status === 0) {
+      throw new Error('collect transaction reverted on-chain');
+    }
     const collectEvent = collectReceipt.events?.find((e: { event?: string }) => e.event === 'Collect');
+    if (!collectEvent?.args) {
+      this.logger.error({ txHash: collectReceipt.transactionHash }, 'Collect event not found');
+      throw new Error(`Collect event not found (tx: ${collectReceipt.transactionHash})`);
+    }
 
-    const principalAmount0 = decreaseEvent?.args?.amount0 ?? BigNumber.from(0);
-    const principalAmount1 = decreaseEvent?.args?.amount1 ?? BigNumber.from(0);
-    const totalAmount0 = collectEvent?.args?.amount0 ?? BigNumber.from(0);
-    const totalAmount1 = collectEvent?.args?.amount1 ?? BigNumber.from(0);
+    const principalAmount0: BigNumber = decreaseEvent.args.amount0;
+    const principalAmount1: BigNumber = decreaseEvent.args.amount1;
+    const totalAmount0: BigNumber = collectEvent.args.amount0;
+    const totalAmount1: BigNumber = collectEvent.args.amount1;
 
     // Step 3: Burn the NFT
     const burnTx: ContractTransaction = await withRetry(() => nftManager.burn(tokenId), 'burn');
-    await burnTx.wait();
+    const burnReceipt = await burnTx.wait();
+    if (burnReceipt.status === 0) {
+      throw new Error('burn transaction reverted on-chain');
+    }
 
     const result: RemoveResult = {
       amount0: principalAmount0,
