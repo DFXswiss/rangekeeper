@@ -15,3 +15,11 @@ export class ConsoleNotifier implements Notifier {
     console.log(`[NOTIFICATION] ${message}`);
   }
 }
+
+export class DryRunNotifier implements Notifier {
+  constructor(private readonly inner: Notifier) {}
+
+  async notify(message: string): Promise<void> {
+    await this.inner.notify(`[DRY RUN] ${message}`);
+  }
+}

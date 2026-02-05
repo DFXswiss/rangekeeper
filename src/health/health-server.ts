@@ -5,6 +5,7 @@ export interface BotStatus {
   uptime: number;
   pools: PoolStatus[];
   lastError?: string;
+  dryRun: boolean;
 }
 
 export interface PoolStatus {
@@ -21,6 +22,7 @@ export interface PoolStatus {
 const botStatus: BotStatus = {
   uptime: 0,
   pools: [],
+  dryRun: false,
 };
 
 const startTime = Date.now();
@@ -40,6 +42,10 @@ export function updateBotError(error: string): void {
 
 export function getBotStatus(): BotStatus {
   return { ...botStatus, uptime: Math.floor((Date.now() - startTime) / 1000) };
+}
+
+export function setDryRunMode(enabled: boolean): void {
+  botStatus.dryRun = enabled;
 }
 
 export function startHealthServer(port: number): void {

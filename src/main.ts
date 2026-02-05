@@ -6,25 +6,34 @@ import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
 import { PositionManager } from './core/position-manager';
+import { DryRunPositionManager } from './core/dry-run-position-manager';
 import { RebalanceEngine, RebalanceContext } from './core/rebalance-engine';
 import { BalanceTracker } from './core/balance-tracker';
 import { SwapExecutor } from './swap/swap-executor';
+import { DryRunSwapExecutor } from './swap/dry-run-swap-executor';
 import { EmergencyStop } from './risk/emergency-stop';
 import { SlippageGuard } from './risk/slippage-guard';
 import { ILTracker } from './risk/il-tracker';
 import { StateStore } from './persistence/state-store';
 import { HistoryLogger } from './persistence/history-logger';
-import { CompositeNotifier, ConsoleNotifier, Notifier } from './notification/notifier';
+import { CompositeNotifier, ConsoleNotifier, DryRunNotifier, Notifier } from './notification/notifier';
 import { TelegramNotifier } from './notification/telegram-notifier';
 import { DiscordNotifier } from './notification/discord-notifier';
 import { GasOracle } from './chain/gas-oracle';
-import { startHealthServer } from './health/health-server';
+import { startHealthServer, setDryRunMode } from './health/health-server';
 
 const engines: RebalanceEngine[] = [];
 
 async function main(): Promise<void> {
   const env = loadEnvConfig();
   const logger = createLogger(env.LOG_LEVEL);
+
+  if (env.DRY_RUN) {
+    logger.warn('============================================');
+    logger.warn('  DRY RUN MODE — no on-chain writes will be executed');
+    logger.warn('============================================');
+    setDryRunMode(true);
+  }
 
   logger.info('Starting RangeKeeper');
 
@@ -39,7 +48,10 @@ async function main(): Promise<void> {
   if (env.DISCORD_WEBHOOK_URL) {
     notifiers.push(new DiscordNotifier(env.DISCORD_WEBHOOK_URL));
   }
-  const notifier = new CompositeNotifier(notifiers);
+  let notifier: Notifier = new CompositeNotifier(notifiers);
+  if (env.DRY_RUN) {
+    notifier = new DryRunNotifier(notifier);
+  }
 
   // Persistence
   const dataDir = path.resolve(process.cwd(), 'data');
@@ -81,8 +93,12 @@ async function main(): Promise<void> {
 
       let poolContract = getPoolContract(poolAddress, wallet);
       const poolMonitor = new PoolMonitor(poolContract, poolEntry.id, poolEntry.monitoring.checkIntervalSeconds * 1000);
-      const positionManager = new PositionManager(() => wallet, poolEntry.pool.nftManagerAddress);
-      const swapExecutor = new SwapExecutor(() => wallet, poolEntry.pool.swapRouterAddress);
+      const positionManager = env.DRY_RUN
+        ? new DryRunPositionManager(() => wallet, poolEntry.pool.nftManagerAddress)
+        : new PositionManager(() => wallet, poolEntry.pool.nftManagerAddress);
+      const swapExecutor = env.DRY_RUN
+        ? new DryRunSwapExecutor(() => wallet, poolEntry.pool.swapRouterAddress)
+        : new SwapExecutor(() => wallet, poolEntry.pool.swapRouterAddress);
       const emergencyStop = new EmergencyStop();
       const slippageGuard = new SlippageGuard(poolEntry.strategy.slippageTolerancePercent);
       const ilTracker = new ILTracker();

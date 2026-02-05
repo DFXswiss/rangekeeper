@@ -13,6 +13,10 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   MAX_TOTAL_LOSS_PERCENT: z.coerce.number().min(1).max(100).default(10),
+  DRY_RUN: z
+    .enum(['true', 'false', '1', '0', ''])
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
