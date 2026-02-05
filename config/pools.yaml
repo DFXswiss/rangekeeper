@@ -1,0 +1,26 @@
+pools:
+  - id: "usdt-zchf-ethereum"
+    chain:
+      name: "ethereum"
+      chainId: 1
+      rpcUrl: "${ETHEREUM_RPC_URL}"
+    pool:
+      token0:
+        address: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+        symbol: "USDT"
+        decimals: 6
+      token1:
+        address: "0xB58906E27d85EFC9DD6f15A0234dF2e2a23e5847"
+        symbol: "ZCHF"
+        decimals: 18
+      feeTier: 100
+      nftManagerAddress: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
+      swapRouterAddress: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+    strategy:
+      rangeWidthPercent: 3.0
+      rebalanceThresholdPercent: 80
+      minRebalanceIntervalMinutes: 30
+      maxGasCostUsd: 5.0
+      slippageTolerancePercent: 0.5
+    monitoring:
+      checkIntervalSeconds: 30

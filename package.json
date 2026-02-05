@@ -1,0 +1,38 @@
+{
+  "name": "rangekeeper",
+  "version": "1.0.0",
+  "description": "Autonomous Uniswap V3 Concentrated Liquidity Management Bot",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "ts-node src/main.ts",
+    "test": "jest",
+    "lint": "eslint src/ test/ --ext .ts",
+    "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts'"
+  },
+  "dependencies": {
+    "@uniswap/v3-sdk": "^3.25.2",
+    "@uniswap/sdk-core": "^7.8.0",
+    "ethers": "^5.8.0",
+    "jsbi": "^4.3.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "yaml": "^2.4.0",
+    "zod": "^3.23.0",
+    "express": "^4.19.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "@types/express": "^4.17.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.0",
+    "@types/jest": "^29.5.0",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "prettier": "^3.2.0"
+  }
+}
