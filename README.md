@@ -28,6 +28,10 @@ RangeKeeper is a **self-contained economic system**:
 
 4. **Unlimited runtime** — As long as the token price moves within an economically reasonable range, the bot can theoretically run indefinitely. There are no external dependencies, no capital injections, no manual intervention required.
 
+### Important assumption
+
+RangeKeeper **only provides liquidity** — it does not ensure price correctness. The project assumes that at least one active arbitrage trader exists in the market who keeps the pool price aligned with the true market price. Without external arbitrage, the pool price could drift and the bot would continue providing liquidity at an incorrect price.
+
 ## Setup
 
 ### Prerequisites
