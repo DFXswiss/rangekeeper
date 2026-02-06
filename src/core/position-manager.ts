@@ -2,6 +2,7 @@ import { Contract, BigNumber, Wallet, constants, ContractTransaction } from 'eth
 import { getLogger } from '../util/logger';
 import { getNftManagerContract, getErc20Contract, ensureApproval } from '../chain/contracts';
 import { withRetry } from '../util/retry';
+import { NonceTracker } from '../chain/nonce-tracker';
 
 export type WalletProvider = () => Wallet;
 
@@ -22,6 +23,7 @@ export interface MintResult {
   liquidity: BigNumber;
   amount0: BigNumber;
   amount1: BigNumber;
+  txHash: string;
 }
 
 export interface RemoveResult {
@@ -29,6 +31,11 @@ export interface RemoveResult {
   amount1: BigNumber;
   fee0: BigNumber;
   fee1: BigNumber;
+  txHashes: {
+    decreaseLiquidity: string;
+    collect: string;
+    burn: string;
+  };
 }
 
 export interface PositionInfo {
@@ -49,6 +56,7 @@ export class PositionManager {
   constructor(
     private readonly getWallet: WalletProvider,
     private readonly nftManagerAddress: string,
+    protected readonly nonceTracker?: NonceTracker,
   ) {}
 
   private get wallet(): Wallet {
@@ -89,6 +97,7 @@ export class PositionManager {
     );
 
     const nftManager = this.nftManager;
+    const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
       () =>
         nftManager.mint({
@@ -103,7 +112,7 @@ export class PositionManager {
           amount1Min,
           recipient: params.recipient,
           deadline,
-        }),
+        }, nonceOverride),
       'mint',
     );
 
@@ -111,6 +120,7 @@ export class PositionManager {
     if (receipt.status === 0) {
       throw new Error('Mint transaction reverted on-chain');
     }
+    this.nonceTracker?.confirmNonce();
 
     const event = receipt.events?.find((e: { event?: string }) => e.event === 'IncreaseLiquidity');
     if (!event?.args) {
@@ -123,6 +133,7 @@ export class PositionManager {
       liquidity: event.args.liquidity,
       amount0: event.args.amount0,
       amount1: event.args.amount1,
+      txHash: receipt.transactionHash,
     };
 
     if (result.tokenId.isZero()) {
@@ -157,6 +168,7 @@ export class PositionManager {
     const amount1Min = BigNumber.from(amounts.amount1).mul(slippageMul).div(10000);
 
     // Step 1: Decrease liquidity with slippage protection
+    const decreaseNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const decreaseTx: ContractTransaction = await withRetry(
       () =>
         nftManager.decreaseLiquidity({
@@ -165,13 +177,14 @@ export class PositionManager {
           amount0Min,
           amount1Min,
           deadline,
-        }),
+        }, decreaseNonce),
       'decreaseLiquidity',
     );
     const decreaseReceipt = await decreaseTx.wait();
     if (decreaseReceipt.status === 0) {
       throw new Error('decreaseLiquidity transaction reverted on-chain');
     }
+    this.nonceTracker?.confirmNonce();
     const decreaseEvent = decreaseReceipt.events?.find((e: { event?: string }) => e.event === 'DecreaseLiquidity');
     if (!decreaseEvent?.args) {
       this.logger.error({ txHash: decreaseReceipt.transactionHash }, 'DecreaseLiquidity event not found');
@@ -180,6 +193,7 @@ export class PositionManager {
 
     // Step 2: Collect all tokens (including fees)
     const maxUint128 = BigNumber.from(2).pow(128).sub(1);
+    const collectNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const collectTx: ContractTransaction = await withRetry(
       () =>
         nftManager.collect({
@@ -187,13 +201,14 @@ export class PositionManager {
           recipient: w.address,
           amount0Max: maxUint128,
           amount1Max: maxUint128,
-        }),
+        }, collectNonce),
       'collect',
     );
     const collectReceipt = await collectTx.wait();
     if (collectReceipt.status === 0) {
       throw new Error('collect transaction reverted on-chain');
     }
+    this.nonceTracker?.confirmNonce();
     const collectEvent = collectReceipt.events?.find((e: { event?: string }) => e.event === 'Collect');
     if (!collectEvent?.args) {
       this.logger.error({ txHash: collectReceipt.transactionHash }, 'Collect event not found');
@@ -206,17 +221,24 @@ export class PositionManager {
     const totalAmount1: BigNumber = collectEvent.args.amount1;
 
     // Step 3: Burn the NFT
-    const burnTx: ContractTransaction = await withRetry(() => nftManager.burn(tokenId), 'burn');
+    const burnNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
+    const burnTx: ContractTransaction = await withRetry(() => nftManager.burn(tokenId, burnNonce), 'burn');
     const burnReceipt = await burnTx.wait();
     if (burnReceipt.status === 0) {
       throw new Error('burn transaction reverted on-chain');
     }
+    this.nonceTracker?.confirmNonce();
 
     const result: RemoveResult = {
       amount0: principalAmount0,
       amount1: principalAmount1,
       fee0: totalAmount0.sub(principalAmount0),
       fee1: totalAmount1.sub(principalAmount1),
+      txHashes: {
+        decreaseLiquidity: decreaseReceipt.transactionHash,
+        collect: collectReceipt.transactionHash,
+        burn: burnReceipt.transactionHash,
+      },
     };
 
     this.logger.info(

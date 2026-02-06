@@ -63,6 +63,7 @@ export class DryRunPositionManager extends PositionManager {
       liquidity,
       amount0: params.amount0Desired,
       amount1: params.amount1Desired,
+      txHash: `dry-run-mint-${tokenId.toString()}`,
     };
   }
 
@@ -83,6 +84,11 @@ export class DryRunPositionManager extends PositionManager {
         amount1: virtualPos.amount1,
         fee0: BigNumber.from(0),
         fee1: BigNumber.from(0),
+        txHashes: {
+          decreaseLiquidity: `dry-run-decrease-${key}`,
+          collect: `dry-run-collect-${key}`,
+          burn: `dry-run-burn-${key}`,
+        },
       };
     }
 
@@ -98,6 +104,11 @@ export class DryRunPositionManager extends PositionManager {
       amount1: pos.tokensOwed1,
       fee0: BigNumber.from(0),
       fee1: BigNumber.from(0),
+      txHashes: {
+        decreaseLiquidity: `dry-run-decrease-${key}`,
+        collect: `dry-run-collect-${key}`,
+        burn: `dry-run-burn-${key}`,
+      },
     };
   }
 

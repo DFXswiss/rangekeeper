@@ -20,6 +20,7 @@ import { CompositeNotifier, ConsoleNotifier, DryRunNotifier, Notifier } from './
 import { TelegramNotifier } from './notification/telegram-notifier';
 import { DiscordNotifier } from './notification/discord-notifier';
 import { GasOracle } from './chain/gas-oracle';
+import { NonceTracker } from './chain/nonce-tracker';
 import { startHealthServer, setDryRunMode } from './health/health-server';
 
 const engines: RebalanceEngine[] = [];
@@ -93,12 +94,15 @@ async function main(): Promise<void> {
 
       let poolContract = getPoolContract(poolAddress, wallet);
       const poolMonitor = new PoolMonitor(poolContract, poolEntry.id, poolEntry.monitoring.checkIntervalSeconds * 1000);
+      const nonceTracker = env.DRY_RUN
+        ? undefined
+        : new NonceTracker(wallet.address, () => failoverProvider.getProvider());
       const positionManager = env.DRY_RUN
         ? new DryRunPositionManager(() => wallet, poolEntry.pool.nftManagerAddress)
-        : new PositionManager(() => wallet, poolEntry.pool.nftManagerAddress);
+        : new PositionManager(() => wallet, poolEntry.pool.nftManagerAddress, nonceTracker);
       const swapExecutor = env.DRY_RUN
         ? new DryRunSwapExecutor(() => wallet, poolEntry.pool.swapRouterAddress)
-        : new SwapExecutor(() => wallet, poolEntry.pool.swapRouterAddress);
+        : new SwapExecutor(() => wallet, poolEntry.pool.swapRouterAddress, nonceTracker);
       const emergencyStop = new EmergencyStop();
       const slippageGuard = new SlippageGuard(poolEntry.strategy.slippageTolerancePercent);
       const ilTracker = new ILTracker();
@@ -114,6 +118,9 @@ async function main(): Promise<void> {
           poolContract = getPoolContract(poolAddress, wallet);
           poolMonitor.setPoolContract(poolContract);
           ctx.wallet = wallet;
+          nonceTracker?.syncOnFailover().catch((err) => {
+            logger.error({ poolId: poolEntry.id, err }, 'Failed to sync nonce on failover');
+          });
           notifier.notify(
             `ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`,
           ).catch(() => {});
@@ -155,6 +162,7 @@ async function main(): Promise<void> {
         historyLogger,
         notifier,
         maxTotalLossPercent: env.MAX_TOTAL_LOSS_PERCENT,
+        nonceTracker,
       };
 
       const engine = new RebalanceEngine(ctx);

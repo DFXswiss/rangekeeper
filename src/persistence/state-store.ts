@@ -2,12 +2,17 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { getLogger } from '../util/logger';
 
+export type RebalanceStage = 'WITHDRAWN' | 'SWAPPED';
+
 export interface PoolState {
   tokenId?: string;
   tickLower?: number;
   tickUpper?: number;
   lastRebalanceTime?: number;
   initialValueUsd?: number;
+  lastNonce?: number;
+  rebalanceStage?: RebalanceStage;
+  pendingTxHashes?: string[];
 }
 
 export interface BotState {
@@ -53,6 +58,14 @@ export class StateStore {
     } catch (err) {
       this.logger.error({ err }, 'Failed to save state');
     }
+  }
+
+  saveOrThrow(): void {
+    const dir = path.dirname(this.filePath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8');
   }
 
   getPoolState(poolId: string): PoolState | undefined {

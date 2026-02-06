@@ -87,7 +87,7 @@ describe('Dry Run E2E Integration', () => {
       ilTracker: new ILTracker(),
       balanceTracker: { setInitialValue: jest.fn(), getInitialValue: jest.fn().mockReturnValue(undefined), getLossPercent: jest.fn() },
       gasOracle: { getGasInfo: jest.fn().mockResolvedValue({ gasPriceGwei: 20, isEip1559: false }), isGasSpike: jest.fn().mockReturnValue(false) },
-      stateStore: { getPoolState: jest.fn().mockReturnValue(undefined), updatePoolState: jest.fn(), save: jest.fn(), getState: jest.fn() },
+      stateStore: { getPoolState: jest.fn().mockReturnValue(undefined), updatePoolState: jest.fn(), save: jest.fn(), saveOrThrow: jest.fn(), getState: jest.fn() },
       historyLogger: { log: jest.fn() },
       notifier: { notify: jest.fn().mockResolvedValue(undefined) },
       maxTotalLossPercent: 10,

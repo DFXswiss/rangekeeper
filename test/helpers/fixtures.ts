@@ -80,6 +80,7 @@ export function createMintResult(tokenId: number): MintResult {
     liquidity: BigNumber.from('1000000000000'),
     amount0: AMOUNT_100_USDT,
     amount1: AMOUNT_100_ZCHF,
+    txHash: '0xmock-mint-hash',
   };
 }
 
@@ -89,6 +90,11 @@ export function createRemoveResult(): RemoveResult {
     amount1: AMOUNT_100_ZCHF,
     fee0: BigNumber.from(1_000_000), // 1 USDT fee
     fee1: BigNumber.from('1000000000000000000'), // 1 ZCHF fee
+    txHashes: {
+      decreaseLiquidity: '0xmock-decrease-hash',
+      collect: '0xmock-collect-hash',
+      burn: '0xmock-burn-hash',
+    },
   };
 }
 

@@ -120,12 +120,18 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
     liquidity: BigNumber.from('1000000000000'),
     amount0: AMOUNT_100_USDT,
     amount1: AMOUNT_100_ZCHF,
+    txHash: '0xmock-mint-hash',
   });
   const removePosition = jest.fn().mockResolvedValue({
     amount0: AMOUNT_100_USDT,
     amount1: AMOUNT_100_ZCHF,
     fee0: BigNumber.from(1_000_000),
     fee1: BigNumber.from('1000000000000000000'),
+    txHashes: {
+      decreaseLiquidity: '0xmock-decrease-hash',
+      collect: '0xmock-collect-hash',
+      burn: '0xmock-burn-hash',
+    },
   });
   const getPosition = jest.fn().mockResolvedValue({
     tokenId: BigNumber.from(123),
@@ -151,7 +157,7 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
 
   // SwapExecutor mocks
   const approveTokensSE = jest.fn().mockResolvedValue(undefined);
-  const executeSwap = jest.fn().mockResolvedValue(AMOUNT_50_USDT());
+  const executeSwap = jest.fn().mockResolvedValue({ amountOut: AMOUNT_50_USDT(), txHash: '0xmock-swap-hash' });
 
   const swapExecutor = {
     approveTokens: approveTokensSE,
@@ -187,10 +193,12 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
   const save = jest.fn();
   const getState = jest.fn().mockReturnValue({ version: 1, startedAt: new Date().toISOString(), pools: {} });
 
+  const saveOrThrow = jest.fn();
   const stateStore = {
     getPoolState: getPoolStateMock,
     updatePoolState,
     save,
+    saveOrThrow,
     getState,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;

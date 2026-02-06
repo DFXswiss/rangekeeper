@@ -114,12 +114,13 @@ describe('State Persistence Integration', () => {
           liquidity: BigNumber.from('1000'),
           amount0: AMOUNT_100_USDT,
           amount1: AMOUNT_100_ZCHF,
+          txHash: '0xmock-mint-hash',
         }),
-        removePosition: jest.fn().mockResolvedValue({ amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0) }),
+        removePosition: jest.fn().mockResolvedValue({ amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0), txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' } }),
         getPosition: jest.fn().mockResolvedValue({ liquidity: BigNumber.from('1000') }),
         findExistingPositions: jest.fn().mockResolvedValue([]),
       },
-      swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: jest.fn().mockResolvedValue(BigNumber.from(0)) },
+      swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(0), txHash: '0xmock-swap-hash' }) },
       emergencyStop: new EmergencyStop(),
       slippageGuard: new SlippageGuard(0.5),
       ilTracker: new ILTracker(),
@@ -163,6 +164,7 @@ describe('State Persistence Integration', () => {
       liquidity: BigNumber.from('1000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     });
 
     const ctx = {
@@ -190,11 +192,11 @@ describe('State Persistence Integration', () => {
       positionManager: {
         approveTokens: jest.fn().mockResolvedValue(undefined),
         mint,
-        removePosition: jest.fn().mockResolvedValue({ amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0) }),
+        removePosition: jest.fn().mockResolvedValue({ amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0), txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' } }),
         getPosition: jest.fn().mockResolvedValue({ liquidity: BigNumber.from('1000') }),
         findExistingPositions: jest.fn().mockResolvedValue([]),
       },
-      swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: jest.fn().mockResolvedValue(BigNumber.from(0)) },
+      swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(0), txHash: '0xmock-swap-hash' }) },
       emergencyStop: new EmergencyStop(),
       slippageGuard: new SlippageGuard(0.5),
       ilTracker: new ILTracker(),
@@ -217,6 +219,7 @@ describe('State Persistence Integration', () => {
       liquidity: BigNumber.from('2000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     });
     ctx.poolMonitor.fetchPoolState.mockResolvedValue(createPoolState(0));
 

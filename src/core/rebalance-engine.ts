@@ -4,18 +4,19 @@ import { PoolMonitor, PoolState, PositionRange } from './pool-monitor';
 import { PositionManager, RemoveResult } from './position-manager';
 import { calculateRange, shouldRebalance, isInRange } from './range-calculator';
 import { calculateSwap } from '../swap/ratio-calculator';
-import { SwapExecutor } from '../swap/swap-executor';
+import { SwapExecutor, SwapResult } from '../swap/swap-executor';
 import { EmergencyStop } from '../risk/emergency-stop';
 import { SlippageGuard } from '../risk/slippage-guard';
 import { ILTracker } from '../risk/il-tracker';
 import { BalanceTracker } from './balance-tracker';
-import { StateStore } from '../persistence/state-store';
+import { StateStore, RebalanceStage } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
 import { updatePoolStatus } from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
+import { NonceTracker } from '../chain/nonce-tracker';
 import { tickToPrice } from '../util/tick-math';
 import { Wallet } from 'ethers';
 
@@ -40,6 +41,7 @@ export interface RebalanceContext {
   notifier: Notifier;
   ethPriceUsd?: number;
   maxTotalLossPercent: number;
+  nonceTracker?: NonceTracker;
 }
 
 export class RebalanceEngine {
@@ -70,7 +72,7 @@ export class RebalanceEngine {
   }
 
   async initialize(): Promise<void> {
-    const { poolEntry, positionManager, wallet, stateStore } = this.ctx;
+    const { poolEntry, positionManager, wallet, stateStore, notifier } = this.ctx;
     const { pool } = poolEntry;
 
     this.logger.info({ poolId: poolEntry.id }, 'Initializing rebalance engine');
@@ -84,6 +86,38 @@ export class RebalanceEngine {
         : undefined;
       this.lastRebalanceTime = savedState.lastRebalanceTime ?? 0;
       this.logger.info({ tokenId: savedState.tokenId, range: this.currentRange }, 'Restored state from disk');
+    }
+
+    // Verify pending TXs from previous run
+    if (savedState?.pendingTxHashes?.length) {
+      const provider = wallet.provider as providers.JsonRpcProvider;
+      for (const hash of savedState.pendingTxHashes) {
+        try {
+          const receipt = await provider.getTransactionReceipt(hash);
+          if (receipt) {
+            this.logger.info({ txHash: hash, status: receipt.status }, receipt.status === 1 ? 'Pending TX confirmed' : 'Pending TX reverted');
+          } else {
+            this.logger.warn({ txHash: hash }, 'Pending TX not found on-chain');
+          }
+        } catch (err) {
+          this.logger.warn({ txHash: hash, err }, 'Failed to verify pending TX');
+        }
+      }
+    }
+
+    // Initialize nonce tracker
+    if (this.ctx.nonceTracker) {
+      await this.ctx.nonceTracker.initialize(savedState?.lastNonce);
+    }
+
+    // Recover from incomplete rebalance
+    if (savedState?.rebalanceStage) {
+      this.logger.warn({ poolId: poolEntry.id, stage: savedState.rebalanceStage }, 'Recovering from incomplete rebalance');
+      this.currentTokenId = undefined;
+      this.currentRange = undefined;
+      stateStore.updatePoolState(poolEntry.id, { rebalanceStage: undefined, pendingTxHashes: undefined });
+      stateStore.save();
+      await notifier.notify(`RECOVERY: ${poolEntry.id} recovering from stage ${savedState.rebalanceStage}`);
     }
 
     // Check for existing on-chain positions
@@ -319,6 +353,7 @@ export class RebalanceEngine {
         tickUpper: range.tickUpper,
         amount0: result.amount0.toString(),
         amount1: result.amount1.toString(),
+        txHash: result.txHash,
       });
 
       await notifier.notify(
@@ -389,6 +424,12 @@ export class RebalanceEngine {
         this.currentRange = undefined;
       }
 
+      // Checkpoint: position withdrawn, funds in wallet
+      this.persistCheckpoint(stateStore, poolEntry.id, 'WITHDRAWN',
+        removeResult?.txHashes
+          ? [removeResult.txHashes.decreaseLiquidity, removeResult.txHashes.collect, removeResult.txHashes.burn]
+          : []);
+
       // STEP 2: Calculate new range
       const freshState = await this.ctx.poolMonitor.fetchPoolState();
       const newRange = calculateRange(freshState.tick, strategy.rangeWidthPercent, pool.feeTier);
@@ -415,14 +456,16 @@ export class RebalanceEngine {
         pool.token1.address,
       );
 
+      let swapResult: SwapResult | undefined;
       if (swapPlan && swapPlan.amountIn.gt(0)) {
-        const swapAmountOut = await swapExecutor.executeSwap(
+        swapResult = await swapExecutor.executeSwap(
           swapPlan.tokenIn,
           swapPlan.tokenOut,
           pool.feeTier,
           swapPlan.amountIn,
           strategy.slippageTolerancePercent,
         );
+        const swapAmountOut = swapResult.amountOut;
 
         // Validate swap slippage using pool price as expected rate
         const swapPrice = tickToPrice(freshState.tick);
@@ -444,6 +487,10 @@ export class RebalanceEngine {
           );
         }
       }
+
+      // Checkpoint: swap completed, ready to mint
+      this.persistCheckpoint(stateStore, poolEntry.id, 'SWAPPED',
+        swapResult ? [swapResult.txHash] : []);
 
       // STEP 4: Mint new position
       this.setState('MINTING');
@@ -515,6 +562,9 @@ export class RebalanceEngine {
         feesCollected0: removeResult?.fee0.toString(),
         feesCollected1: removeResult?.fee1.toString(),
         ilPercent: ilSnapshot?.ilPercent?.toFixed(4),
+        txHash: mintResult.txHash,
+        removeTxHashes: removeResult?.txHashes,
+        swapTxHash: swapResult?.txHash,
       });
 
       let message =
@@ -569,8 +619,24 @@ export class RebalanceEngine {
       tickLower: this.currentRange?.tickLower,
       tickUpper: this.currentRange?.tickUpper,
       lastRebalanceTime: this.lastRebalanceTime,
+      rebalanceStage: undefined,
+      pendingTxHashes: undefined,
+      lastNonce: this.ctx.nonceTracker?.getCurrentNonce(),
     });
     stateStore.save();
+  }
+
+  private persistCheckpoint(stateStore: StateStore, poolId: string, stage: RebalanceStage, txHashes: string[]): void {
+    stateStore.updatePoolState(poolId, {
+      tokenId: this.currentTokenId?.toString(),
+      tickLower: this.currentRange?.tickLower,
+      tickUpper: this.currentRange?.tickUpper,
+      lastRebalanceTime: this.lastRebalanceTime,
+      rebalanceStage: stage,
+      pendingTxHashes: txHashes,
+      lastNonce: this.ctx.nonceTracker?.getCurrentNonce(),
+    });
+    stateStore.saveOrThrow();
   }
 
   /**

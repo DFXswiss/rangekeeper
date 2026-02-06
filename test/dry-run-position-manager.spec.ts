@@ -39,12 +39,13 @@ describe('DryRunPositionManager', () => {
   });
 
   describe('mint', () => {
-    it('should return a virtual position with tokenId >= 900_000_000', async () => {
+    it('should return a virtual position with tokenId >= 900_000_000 and txHash', async () => {
       const result = await manager.mint(baseMintParams);
       expect(result.tokenId.gte(900_000_000)).toBe(true);
       expect(result.amount0.eq(baseMintParams.amount0Desired)).toBe(true);
       expect(result.amount1.eq(baseMintParams.amount1Desired)).toBe(true);
       expect(result.liquidity.eq(baseMintParams.amount0Desired.add(baseMintParams.amount1Desired))).toBe(true);
+      expect(result.txHash).toMatch(/^dry-run-mint-/);
     });
 
     it('should assign incrementing tokenIds', async () => {
@@ -78,7 +79,7 @@ describe('DryRunPositionManager', () => {
   });
 
   describe('removePosition', () => {
-    it('should remove a virtual position and return its amounts', async () => {
+    it('should remove a virtual position and return its amounts with txHashes', async () => {
       const mintResult = await manager.mint(baseMintParams);
       const removeResult = await manager.removePosition(mintResult.tokenId, mintResult.liquidity, 0.5);
 
@@ -86,6 +87,9 @@ describe('DryRunPositionManager', () => {
       expect(removeResult.amount1.eq(baseMintParams.amount1Desired)).toBe(true);
       expect(removeResult.fee0.eq(0)).toBe(true);
       expect(removeResult.fee1.eq(0)).toBe(true);
+      expect(removeResult.txHashes.decreaseLiquidity).toMatch(/^dry-run-decrease-/);
+      expect(removeResult.txHashes.collect).toMatch(/^dry-run-collect-/);
+      expect(removeResult.txHashes.burn).toMatch(/^dry-run-burn-/);
       expect(manager.getVirtualPositions()).toHaveLength(0);
     });
 

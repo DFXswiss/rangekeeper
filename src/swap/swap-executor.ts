@@ -2,8 +2,14 @@ import { Contract, BigNumber, Wallet, ContractTransaction, constants } from 'eth
 import { getLogger } from '../util/logger';
 import { getSwapRouterContract, getErc20Contract, ensureApproval } from '../chain/contracts';
 import { withRetry } from '../util/retry';
+import { NonceTracker } from '../chain/nonce-tracker';
 
 export type WalletProvider = () => Wallet;
+
+export interface SwapResult {
+  amountOut: BigNumber;
+  txHash: string;
+}
 
 export class SwapExecutor {
   private readonly logger = getLogger();
@@ -11,6 +17,7 @@ export class SwapExecutor {
   constructor(
     private readonly getWallet: WalletProvider,
     private readonly swapRouterAddress: string,
+    protected readonly nonceTracker?: NonceTracker,
   ) {}
 
   private get wallet(): Wallet {
@@ -40,7 +47,7 @@ export class SwapExecutor {
     feeTier: number,
     amountIn: BigNumber,
     slippagePercent: number,
-  ): Promise<BigNumber> {
+  ): Promise<SwapResult> {
     const w = this.wallet;
     const router = this.router;
 
@@ -53,6 +60,7 @@ export class SwapExecutor {
     const slippageMul = Math.floor((1 - slippagePercent / 100) * 10000);
     const amountOutMinimum = amountIn.mul(slippageMul).div(10000);
 
+    const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
       () =>
         router.exactInputSingle({
@@ -63,7 +71,7 @@ export class SwapExecutor {
           amountIn,
           amountOutMinimum,
           sqrtPriceLimitX96: 0,
-        }),
+        }, nonceOverride),
       'swap',
     );
 
@@ -71,6 +79,7 @@ export class SwapExecutor {
     if (receipt.status === 0) {
       throw new Error('Swap transaction reverted on-chain');
     }
+    this.nonceTracker?.confirmNonce();
 
     // Parse Transfer event from output token to get amountOut
     const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -94,6 +103,6 @@ export class SwapExecutor {
       'Swap completed',
     );
 
-    return amountOut;
+    return { amountOut, txHash: receipt.transactionHash };
   }
 }

@@ -64,12 +64,14 @@ function buildContext() {
       liquidity: BigNumber.from('1000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
       fee0: BigNumber.from(0),
       fee1: BigNumber.from(0),
+      txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' },
     }),
     getPosition: jest.fn().mockResolvedValue({ liquidity: BigNumber.from('1000') }),
     findExistingPositions: jest.fn().mockResolvedValue([]),
@@ -91,13 +93,13 @@ function buildContext() {
       getPosition: mocks.getPosition,
       findExistingPositions: mocks.findExistingPositions,
     },
-    swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: jest.fn().mockResolvedValue(BigNumber.from(0)) },
+    swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(0), txHash: '0xmock-swap-hash' }) },
     emergencyStop: new EmergencyStop(),
     slippageGuard: new SlippageGuard(0.5),
     ilTracker: new ILTracker(),
     balanceTracker: { setInitialValue: jest.fn(), getInitialValue: jest.fn().mockReturnValue(undefined), getLossPercent: jest.fn() },
     gasOracle: { getGasInfo: mocks.getGasInfo, isGasSpike: mocks.isGasSpike },
-    stateStore: { getPoolState: jest.fn().mockReturnValue(undefined), updatePoolState: jest.fn(), save: jest.fn(), getState: jest.fn() },
+    stateStore: { getPoolState: jest.fn().mockReturnValue(undefined), updatePoolState: jest.fn(), save: jest.fn(), saveOrThrow: jest.fn(), getState: jest.fn() },
     historyLogger: { log: jest.fn() },
     notifier: { notify: mocks.notify },
     maxTotalLossPercent: 10,
@@ -141,6 +143,7 @@ describe('Pool Monitor Events Integration', () => {
       liquidity: BigNumber.from('1000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     });
 
     // Out of range
@@ -185,6 +188,7 @@ describe('Pool Monitor Events Integration', () => {
       liquidity: BigNumber.from('1000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     });
 
     // In-range near edge (triggers shouldRebalance but is in range): should skip due to interval

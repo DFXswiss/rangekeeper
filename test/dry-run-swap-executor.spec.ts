@@ -26,12 +26,13 @@ describe('DryRunSwapExecutor', () => {
   });
 
   describe('executeSwap', () => {
-    it('should deduct pool fee from amountIn (500 = 0.05%)', async () => {
+    it('should deduct pool fee from amountIn (500 = 0.05%) and return SwapResult', async () => {
       const amountIn = BigNumber.from('1000000'); // 1 USDC (6 decimals)
       const result = await executor.executeSwap('0xIN', '0xOUT', 500, amountIn, 0.5);
 
       // amountOut = 1000000 * (1000000 - 500) / 1000000 = 999500
-      expect(result.eq(BigNumber.from('999500'))).toBe(true);
+      expect(result.amountOut.eq(BigNumber.from('999500'))).toBe(true);
+      expect(result.txHash).toMatch(/^dry-run-swap-/);
     });
 
     it('should deduct pool fee (3000 = 0.3%)', async () => {
@@ -39,7 +40,7 @@ describe('DryRunSwapExecutor', () => {
       const result = await executor.executeSwap('0xIN', '0xOUT', 3000, amountIn, 0.5);
 
       // amountOut = 1000000000 * (1000000 - 3000) / 1000000 = 997000000
-      expect(result.eq(BigNumber.from('997000000'))).toBe(true);
+      expect(result.amountOut.eq(BigNumber.from('997000000'))).toBe(true);
     });
 
     it('should deduct pool fee (10000 = 1%)', async () => {
@@ -47,12 +48,12 @@ describe('DryRunSwapExecutor', () => {
       const result = await executor.executeSwap('0xIN', '0xOUT', 10000, amountIn, 1);
 
       // amountOut = 10000000 * (1000000 - 10000) / 1000000 = 9900000
-      expect(result.eq(BigNumber.from('9900000'))).toBe(true);
+      expect(result.amountOut.eq(BigNumber.from('9900000'))).toBe(true);
     });
 
     it('should handle zero amountIn', async () => {
       const result = await executor.executeSwap('0xIN', '0xOUT', 500, BigNumber.from(0), 0.5);
-      expect(result.eq(0)).toBe(true);
+      expect(result.amountOut.eq(0)).toBe(true);
     });
 
     it('should handle fee tier of 100 (0.01%)', async () => {
@@ -60,7 +61,7 @@ describe('DryRunSwapExecutor', () => {
       const result = await executor.executeSwap('0xIN', '0xOUT', 100, amountIn, 0.5);
 
       // amountOut = 10000000 * (1000000 - 100) / 1000000 = 9999000
-      expect(result.eq(BigNumber.from('9999000'))).toBe(true);
+      expect(result.amountOut.eq(BigNumber.from('9999000'))).toBe(true);
     });
   });
 });

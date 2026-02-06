@@ -1,6 +1,6 @@
 import { BigNumber } from 'ethers';
 import { getLogger } from '../util/logger';
-import { SwapExecutor, WalletProvider } from './swap-executor';
+import { SwapExecutor, SwapResult, WalletProvider } from './swap-executor';
 
 export class DryRunSwapExecutor extends SwapExecutor {
   private readonly dryLogger = getLogger();
@@ -19,7 +19,7 @@ export class DryRunSwapExecutor extends SwapExecutor {
     feeTier: number,
     amountIn: BigNumber,
     _slippagePercent: number,
-  ): Promise<BigNumber> {
+  ): Promise<SwapResult> {
     const amountOut = amountIn.mul(1_000_000 - feeTier).div(1_000_000);
 
     this.dryLogger.info(
@@ -33,6 +33,6 @@ export class DryRunSwapExecutor extends SwapExecutor {
       '[DRY RUN] Simulated swap (fee deducted)',
     );
 
-    return amountOut;
+    return { amountOut, txHash: `dry-run-swap-${amountIn.toString()}` };
   }
 }

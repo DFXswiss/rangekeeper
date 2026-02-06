@@ -60,12 +60,14 @@ function buildContext() {
       liquidity: BigNumber.from('1000000000000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
       fee0: BigNumber.from(0),
       fee1: BigNumber.from(0),
+      txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' },
     }),
     getPosition: jest.fn().mockResolvedValue({
       tokenId: BigNumber.from(123),
@@ -73,7 +75,7 @@ function buildContext() {
     }),
     findExistingPositions: jest.fn().mockResolvedValue([]),
     approveTokensSE: jest.fn().mockResolvedValue(undefined),
-    executeSwap: jest.fn().mockResolvedValue(BigNumber.from(50_000_000)),
+    executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(50_000_000), txHash: '0xmock-swap-hash' }),
     setInitialValue: jest.fn(),
     getInitialValue: jest.fn().mockReturnValue(undefined),
     getLossPercent: jest.fn(),
@@ -112,7 +114,7 @@ function buildContext() {
     ilTracker: new ILTracker(),
     balanceTracker: { setInitialValue: mocks.setInitialValue, getInitialValue: mocks.getInitialValue, getLossPercent: mocks.getLossPercent },
     gasOracle: { getGasInfo: mocks.getGasInfo, isGasSpike: mocks.isGasSpike },
-    stateStore: { getPoolState: mocks.getPoolState, updatePoolState: mocks.updatePoolState, save: mocks.save, getState: jest.fn() },
+    stateStore: { getPoolState: mocks.getPoolState, updatePoolState: mocks.updatePoolState, save: mocks.save, saveOrThrow: jest.fn(), getState: jest.fn() },
     historyLogger: { log: mocks.log },
     notifier: { notify: mocks.notify },
     maxTotalLossPercent: 10,
@@ -136,6 +138,7 @@ async function initEngineWithPosition(ctx: any, mocks: any): Promise<RebalanceEn
     liquidity: BigNumber.from('1000000000000'),
     amount0: AMOUNT_100_USDT,
     amount1: AMOUNT_100_ZCHF,
+    txHash: '0xmock-mint-hash',
   });
   return engine;
 }

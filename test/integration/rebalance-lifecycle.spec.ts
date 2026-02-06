@@ -66,12 +66,14 @@ function buildContext(overrides: Record<string, any> = {}) {
       liquidity: BigNumber.from('1000000000000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
       fee0: BigNumber.from(1_000_000),
       fee1: BigNumber.from('1000000000000000000'),
+      txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' },
     }),
     getPosition: jest.fn().mockResolvedValue({
       tokenId: BigNumber.from(123),
@@ -81,7 +83,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     }),
     findExistingPositions: jest.fn().mockResolvedValue([]),
     approveTokensSE: jest.fn().mockResolvedValue(undefined),
-    executeSwap: jest.fn().mockResolvedValue(BigNumber.from(50_000_000)),
+    executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(50_000_000), txHash: '0xmock-swap-hash' }),
     setInitialValue: jest.fn(),
     getInitialValue: jest.fn().mockReturnValue(undefined),
     getLossPercent: jest.fn(),
@@ -147,6 +149,7 @@ function buildContext(overrides: Record<string, any> = {}) {
       getPoolState: mocks.getPoolState,
       updatePoolState: mocks.updatePoolState,
       save: mocks.save,
+      saveOrThrow: jest.fn(),
       getState: mocks.getState,
     },
     historyLogger: { log: mocks.log },
@@ -275,6 +278,7 @@ describe('Rebalance Lifecycle Integration', () => {
       liquidity: BigNumber.from('1000000000000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     });
     mocks.fetchPoolState.mockResolvedValue(createPoolState(0));
 
@@ -301,7 +305,7 @@ describe('Rebalance Lifecycle Integration', () => {
     const callOrder: string[] = [];
     mocks.removePosition.mockImplementation(async () => {
       callOrder.push('remove');
-      return { amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0) };
+      return { amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0), txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' } };
     });
     mocks.fetchPoolState.mockImplementation(async () => {
       callOrder.push('fetchFreshState');
@@ -309,7 +313,7 @@ describe('Rebalance Lifecycle Integration', () => {
     });
     mocks.mint.mockImplementation(async () => {
       callOrder.push('mint');
-      return { tokenId: BigNumber.from(456), liquidity: BigNumber.from('1000'), amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF };
+      return { tokenId: BigNumber.from(456), liquidity: BigNumber.from('1000'), amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, txHash: '0xmock-mint-hash' };
     });
 
     // Out-of-range triggers rebalance
@@ -336,6 +340,7 @@ describe('Rebalance Lifecycle Integration', () => {
       liquidity: BigNumber.from('1000000000000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
+      txHash: '0xmock-mint-hash',
     });
 
     await engine.onPriceUpdate(createPoolState(200));
