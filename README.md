@@ -4,41 +4,68 @@ Autonomous Uniswap V3 Liquidity Provisioning Bot. Ensures that a specific token 
 
 ## Why does this project exist?
 
-For a token to be meaningfully tradeable on a DEX, it needs liquidity. Without sufficient liquidity near the current price, trades suffer from high slippage or are simply not possible. RangeKeeper solves this by permanently providing Concentrated Liquidity within a tight price range (±2-5%) around the current market price.
+For a token to be meaningfully tradeable on a DEX, it needs liquidity. Without sufficient liquidity near the current price, trades suffer from high slippage or are simply not possible. RangeKeeper solves this by permanently providing liquidity within a tight price range around the current market price.
 
 **The goal is not profit maximization — the goal is tradeability.**
 
-The bot is an autonomous market maker for a specific token.
+## The core problem
+
+On Uniswap V3, liquidity is provided as **positions** — each one an NFT that covers a specific price range. When the market price moves outside that range, the position stops earning fees and the tokens must be repositioned.
+
+A naive approach is: withdraw the position, swap the tokens to the right ratio, open a new position at the current price. But this breaks when the bot is the **sole liquidity provider** in the pool: after withdrawing the single position, the pool has zero liquidity. The swap step becomes impossible because there is nothing to swap against.
+
+**RangeKeeper solves this with the 7-band model.**
 
 ## How does it work?
 
-RangeKeeper is a **self-contained economic system**:
+### 1. Initial setup
 
-1. **One-time funding** — The wallet is funded once with both tokens of the pair (e.g. USDT + ZCHF). No additional capital is ever injected.
+The wallet is funded once with both tokens of the pair (e.g. USDT + ZCHF). On first start, the bot splits the total price range into **7 contiguous bands** (each its own Uniswap V3 NFT position) and mints all 7:
 
-2. **7-band model** — Instead of a single Uniswap V3 position, the bot creates **7 contiguous NFT positions** (bands) covering the full price range. This is critical when the bot is the sole LP: removing a single position would leave the pool with zero liquidity, making swaps impossible.
-
-   ```
+```
+ Lower                                                        Upper
    [Band 0] [Band 1] [Band 2] [Band 3] [Band 4] [Band 5] [Band 6]
-                                  ↑ Price
-   ```
+                                   ↑
+                              Current Price
+```
 
-   - **Safe zone** (Bands 2–4): Price is near center, no action needed.
-   - **Trigger zone** (Band 1 or 5): Price is drifting — rebalance is triggered.
+Each band covers `rangeWidthPercent / 7` of the total range. Example: 3% total range = ~0.43% per band.
 
-3. **Autonomous repositioning** — When the price enters a trigger band, the bot dissolves the band on the opposite end, swaps through the pool (6 remaining bands still provide liquidity), and mints a new band on the side the price is moving towards.
+### 2. Monitoring
 
-   ```
-   Price drifts down into Band 1:
-     → Dissolve Band 6 (opposite end)
-     → Swap token0 → token1 (6 bands provide liquidity)
-     → Mint new Band below Band 0
-     → Still 7 bands, shifted downward
-   ```
+The bot polls the pool price at a configurable interval. Depending on which band the price is in, it decides:
 
-4. **Closed loop** — The tokens never leave the system. They are continuously recycled. Accrued trading fees flow back into the next position. The total capital stays within the system — only the ratio between the two tokens changes depending on the current market price.
+| Price location | Action |
+|----------------|--------|
+| **Bands 2–4** (safe zone) | Do nothing. Price is near center. |
+| **Band 1** (lower trigger) | Rebalance: price is drifting down. |
+| **Band 5** (upper trigger) | Rebalance: price is drifting up. |
+| **Bands 0 or 6** (buffer) | Already handled — rebalance was triggered at band 1/5. These exist as buffer in case the price moves fast between two polling cycles. |
 
-5. **Unlimited runtime** — As long as the token price moves within an economically reasonable range, the bot can theoretically run indefinitely. There are no external dependencies, no capital injections, no manual intervention required.
+### 3. Rebalancing
+
+When the price enters a trigger band, the bot dissolves the band on the **opposite end** — the one furthest from where the price is heading. That band is the least useful: it covers a price range the market is moving away from.
+
+Example — price drifts down into Band 1:
+
+```
+ Before:  [0] [1] [2] [3] [4] [5] [6]
+                ↑ price here              → dissolve Band 6 (furthest away)
+
+ Step 1:  [0] [1] [2] [3] [4] [5]        Band 6 removed, tokens in wallet
+ Step 2:  Swap token0 → token1            6 remaining bands provide liquidity!
+ Step 3:  [new] [0] [1] [2] [3] [4] [5]  Mint new band below Band 0
+
+ After:   7 bands again, shifted one position lower
+```
+
+This is the key insight: **6 out of 7 bands remain in the pool during the swap**, so the pool always has liquidity. Per rebalance, only 1 band is removed and 1 is minted.
+
+### 4. Closed loop
+
+The tokens never leave the system. They are continuously recycled between positions. Accrued trading fees flow back into the next position. No additional capital is ever injected — only the ratio between the two tokens changes depending on the current market price.
+
+As long as the token price moves within an economically reasonable range, the bot can run indefinitely.
 
 ### Important assumption
 
@@ -95,18 +122,18 @@ pools:
         address: "0xB58906E27d85EFC9DD6f15A0234dF2e2a23e5847"
         symbol: "ZCHF"
         decimals: 18
-      feeTier: 100
+      feeTier: 100                        # 0.01% fee tier (Uniswap V3 convention: 100 = 0.01%)
       nftManagerAddress: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
       swapRouterAddress: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
     strategy:
-      rangeWidthPercent: 3.0            # total range width (split across 7 bands)
-      minRebalanceIntervalMinutes: 30    # min 30 min between rebalances
-      maxGasCostUsd: 5.0                 # max gas cost per rebalance
-      slippageTolerancePercent: 0.5      # max slippage
-      expectedPriceRatio: 1.0            # expected price ratio (for depeg detection)
-      depegThresholdPercent: 5           # max deviation before emergency stop
+      rangeWidthPercent: 3.0              # total range width (split across 7 bands)
+      minRebalanceIntervalMinutes: 30     # min 30 min between rebalances
+      maxGasCostUsd: 5.0                  # max gas cost per rebalance
+      slippageTolerancePercent: 0.5       # max slippage for swaps
+      expectedPriceRatio: 1.0             # expected price ratio (e.g. 1.0 for stablecoin pairs)
+      depegThresholdPercent: 5            # max deviation from expected ratio before emergency stop
     monitoring:
-      checkIntervalSeconds: 30           # poll pool price every 30s
+      checkIntervalSeconds: 30            # poll pool price every 30s
 ```
 
 ## Running
@@ -115,6 +142,12 @@ pools:
 
 ```bash
 npm run dev
+```
+
+### Dry run (no on-chain transactions)
+
+```bash
+DRY_RUN=true npm run dev
 ```
 
 ### Production (Docker)
@@ -138,36 +171,50 @@ npm test
 
 ## Architecture
 
+### Lifecycle overview
+
+```
+First start          Normal operation              Price drifts into trigger band
+     │                      │                                │
+     ▼                      ▼                                ▼
+ Mint 7 bands  ──▶  MONITORING  ──▶  Price in safe zone? ── yes ──▶ do nothing
+                         ▲               │
+                         │              no
+                         │               │
+                         │               ▼
+                         │         EVALUATING (gas check)
+                         │               │
+                         │               ▼
+                         │         WITHDRAWING (dissolve opposite band)
+                         │               │
+                         │               ▼
+                         │         SWAPPING (through own pool, 6 bands active)
+                         │               │
+                         │               ▼
+                         │         MINTING (new band on price-moving side)
+                         │               │
+                         └───────────────┘
+                              7 bands again
+```
+
 ### 7-Band Model
 
 The total range (`rangeWidthPercent`) is divided into 7 equal bands, each its own Uniswap V3 NFT position. Band width per band = `rangeWidthPercent / 7` (e.g. 3% total = ~0.43% per band).
 
-| Band Index | Role | Action when price enters |
-|------------|------|--------------------------|
-| 0 | Outer lower | No direct trigger (beyond band 1) |
+| Band Index | Role | When price enters |
+|------------|------|-------------------|
+| 0 | Buffer lower | Already handled — rebalance triggered at band 1 |
 | 1 | **Lower trigger** | Dissolve band 6, swap, mint new band below 0 |
-| 2–4 | **Safe zone** | No action |
+| 2–4 | **Safe zone** | No action needed |
 | 5 | **Upper trigger** | Dissolve band 0, swap, mint new band above 6 |
-| 6 | Outer upper | No direct trigger (beyond band 5) |
+| 6 | Buffer upper | Already handled — rebalance triggered at band 5 |
 
-### Rebalance State Machine
+### Band rebalance flow
 
-```
-IDLE → MONITORING → EVALUATING → WITHDRAWING → SWAPPING → MINTING → MONITORING
-```
-
-**Rebalance is triggered when:**
-- Price enters band 1 (lower trigger) or band 5 (upper trigger)
-
-**Rebalance is skipped when:**
-- Price is in safe zone (bands 2–4)
-- Minimum interval since last rebalance not yet reached
-
-**Band rebalance flow:**
-1. Dissolve opposite band: `decreaseLiquidity()` + `collect()` + `burn()`
-2. Swap through own pool (6 remaining bands provide liquidity)
-3. Mint new band at the direction the price is moving
-4. Update BandManager state, persist to disk, send notification
+1. **Dissolve** opposite band: `decreaseLiquidity()` + `collect()` + `burn()`
+2. **Swap** through own pool (6 remaining bands provide liquidity)
+3. **Mint** new band at the direction the price is moving
+4. **Persist** state to disk, send notification
 
 Per rebalance: 1 remove + 1 swap + 1 mint. Always 7 bands after completion.
 
@@ -175,11 +222,11 @@ Per rebalance: 1 remove + 1 swap + 1 mint. Always 7 bands after completion.
 
 | Condition | Threshold | Action |
 |-----------|-----------|--------|
-| Portfolio value loss | >10% from start | Close all bands, stop bot |
+| Portfolio value loss | >10% from start | Close all 7 bands, stop bot |
 | Single rebalance loss | >2% | Pause, alert |
 | Consecutive TX errors | >3 in a row | Pause, alert |
 | Gas spike | >10x normal | Pause rebalancing |
-| Token depeg | >5% from expected price | Emergency withdraw all bands, stop bot |
+| Token depeg | >5% from expected ratio | Emergency withdraw all bands, stop bot |
 
 ### Health Endpoints
 
