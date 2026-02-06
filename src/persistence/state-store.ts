@@ -4,10 +4,21 @@ import { getLogger } from '../util/logger';
 
 export type RebalanceStage = 'WITHDRAWN' | 'SWAPPED';
 
+export interface BandState {
+  tokenId: string;
+  tickLower: number;
+  tickUpper: number;
+}
+
 export interface PoolState {
+  // Legacy single-position fields (kept for migration)
   tokenId?: string;
   tickLower?: number;
   tickUpper?: number;
+  // Band model fields
+  bands?: BandState[];
+  bandTickWidth?: number;
+  // Common fields
   lastRebalanceTime?: number;
   initialValueUsd?: number;
   lastNonce?: number;

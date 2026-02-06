@@ -54,15 +54,19 @@ function buildContext(overrides: Record<string, any> = {}) {
     provider: { getTransactionReceipt },
   };
 
+  let mintCallCount = 0;
   const mocks = {
     fetchPoolState: jest.fn(),
     approveTokensPM: jest.fn().mockResolvedValue(undefined),
-    mint: jest.fn().mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000000000000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    mint: jest.fn().mockImplementation(async () => {
+      mintCallCount++;
+      return {
+        tokenId: BigNumber.from(100 + mintCallCount),
+        liquidity: BigNumber.from('1000000000000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintCallCount}`,
+      };
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
@@ -167,12 +171,14 @@ describe('Checkpoint Recovery Integration', () => {
     jest.clearAllMocks();
   });
 
-  it('recovery from WITHDRAWN stage clears stage and sends notification', async () => {
+  it('recovery from WITHDRAWN stage clears bands and sends notification', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      tokenId: '123',
-      tickLower: -15,
-      tickUpper: 15,
+      bands: [
+        { tokenId: '201', tickLower: -150, tickUpper: -107 },
+        { tokenId: '202', tickLower: -107, tickUpper: -64 },
+      ],
+      bandTickWidth: 43,
       lastRebalanceTime: Date.now() - 60000,
       rebalanceStage: 'WITHDRAWN',
       pendingTxHashes: ['0xabc', '0xdef'],
@@ -185,6 +191,8 @@ describe('Checkpoint Recovery Integration', () => {
     expect(mocks.updatePoolState).toHaveBeenCalledWith('USDT-ZCHF-100', expect.objectContaining({
       rebalanceStage: undefined,
       pendingTxHashes: undefined,
+      bands: undefined,
+      bandTickWidth: undefined,
     }));
     expect(mocks.save).toHaveBeenCalled();
 
@@ -192,18 +200,18 @@ describe('Checkpoint Recovery Integration', () => {
     expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('RECOVERY'));
     expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('WITHDRAWN'));
 
-    // tokenId should be cleared (position was withdrawn)
-    expect(engine.getCurrentTokenId()).toBeUndefined();
-    expect(engine.getCurrentRange()).toBeUndefined();
+    // Bands should be cleared (position was withdrawn)
+    expect(engine.getBands()).toHaveLength(0);
     expect(engine.getState()).toBe('MONITORING');
   });
 
-  it('recovery from SWAPPED stage clears stage and sends notification', async () => {
+  it('recovery from SWAPPED stage clears bands and sends notification', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      tokenId: '456',
-      tickLower: -20,
-      tickUpper: 20,
+      bands: [
+        { tokenId: '201', tickLower: -150, tickUpper: -107 },
+      ],
+      bandTickWidth: 43,
       lastRebalanceTime: Date.now() - 60000,
       rebalanceStage: 'SWAPPED',
       pendingTxHashes: ['0xswap-hash'],
@@ -217,16 +225,23 @@ describe('Checkpoint Recovery Integration', () => {
       pendingTxHashes: undefined,
     }));
     expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('SWAPPED'));
-    expect(engine.getCurrentTokenId()).toBeUndefined();
+    expect(engine.getBands()).toHaveLength(0);
     expect(engine.getState()).toBe('MONITORING');
   });
 
   it('normal startup without rebalance stage does not trigger recovery', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      tokenId: '123',
-      tickLower: -15,
-      tickUpper: 15,
+      bands: [
+        { tokenId: '201', tickLower: -150, tickUpper: -107 },
+        { tokenId: '202', tickLower: -107, tickUpper: -64 },
+        { tokenId: '203', tickLower: -64, tickUpper: -21 },
+        { tokenId: '204', tickLower: -21, tickUpper: 22 },
+        { tokenId: '205', tickLower: 22, tickUpper: 65 },
+        { tokenId: '206', tickLower: 65, tickUpper: 108 },
+        { tokenId: '207', tickLower: 108, tickUpper: 151 },
+      ],
+      bandTickWidth: 43,
       lastRebalanceTime: Date.now() - 60000,
     });
 
@@ -236,17 +251,18 @@ describe('Checkpoint Recovery Integration', () => {
     // No recovery notification
     expect(mocks.notify).not.toHaveBeenCalledWith(expect.stringContaining('RECOVERY'));
 
-    // tokenId should be restored normally
-    expect(engine.getCurrentTokenId()!.eq(123)).toBe(true);
-    expect(engine.getCurrentRange()).toEqual({ tickLower: -15, tickUpper: 15 });
+    // Bands should be restored normally
+    expect(engine.getBands()).toHaveLength(7);
+    expect(engine.getBands()[0].tokenId.eq(201)).toBe(true);
   });
 
   it('pending TX verification checks receipts on startup', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      tokenId: '123',
-      tickLower: -15,
-      tickUpper: 15,
+      bands: [
+        { tokenId: '201', tickLower: -150, tickUpper: -107 },
+      ],
+      bandTickWidth: 43,
       pendingTxHashes: ['0xconfirmed', '0xreverted', '0xnotfound'],
     });
 
@@ -264,12 +280,13 @@ describe('Checkpoint Recovery Integration', () => {
     expect(mocks.getTransactionReceipt).toHaveBeenCalledWith('0xnotfound');
   });
 
-  it('recovery allows minting new position on next price update', async () => {
+  it('recovery allows minting new bands on next price update', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      tokenId: '123',
-      tickLower: -15,
-      tickUpper: 15,
+      bands: [
+        { tokenId: '201', tickLower: -150, tickUpper: -107 },
+      ],
+      bandTickWidth: 43,
       lastRebalanceTime: Date.now() - 60000,
       rebalanceStage: 'WITHDRAWN',
       pendingTxHashes: [],
@@ -278,14 +295,14 @@ describe('Checkpoint Recovery Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Position cleared by recovery
-    expect(engine.getCurrentTokenId()).toBeUndefined();
+    // Bands cleared by recovery
+    expect(engine.getBands()).toHaveLength(0);
 
-    // Now price update should trigger initial mint
+    // Now price update should trigger initial mint of 7 bands
     await engine.onPriceUpdate(createPoolState(0));
 
-    expect(mocks.mint).toHaveBeenCalledTimes(1);
-    expect(engine.getCurrentTokenId()!.eq(123)).toBe(true);
+    expect(mocks.mint).toHaveBeenCalledTimes(7);
+    expect(engine.getBands()).toHaveLength(7);
     expect(engine.getState()).toBe('MONITORING');
   });
 });

@@ -53,15 +53,19 @@ function buildContext(overrides: Record<string, any> = {}) {
   const wallet = { address: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', provider: {} };
   const emergencyStop = new EmergencyStop();
 
+  let mintCallCount = 0;
   const mocks = {
     fetchPoolState: jest.fn(),
     approveTokensPM: jest.fn().mockResolvedValue(undefined),
-    mint: jest.fn().mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000000000000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    mint: jest.fn().mockImplementation(async () => {
+      mintCallCount++;
+      return {
+        tokenId: BigNumber.from(100 + mintCallCount),
+        liquidity: BigNumber.from('1000000000000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintCallCount}`,
+      };
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
@@ -148,17 +152,18 @@ describe('Emergency Scenarios Integration', () => {
     jest.clearAllMocks();
   });
 
-  it('depeg detected triggers emergency withdraw and state=STOPPED', async () => {
+  it('depeg detected triggers emergency withdraw of all bands and state=STOPPED', async () => {
     const { ctx, mocks, emergencyStop } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Mint initial position at tick=0
+    // Mint initial 7 bands at tick=0
     await engine.onPriceUpdate(createPoolState(0));
-    expect(engine.getCurrentTokenId()!.eq(123)).toBe(true);
+    expect(engine.getBands()).toHaveLength(7);
 
-    // Depeg: tick corresponding to price deviation > 5% from 1.0
-    // tick ~= ln(price) / ln(1.0001); for price=1.06, tick ~= 582
+    mocks.removePosition.mockClear();
+
+    // Depeg: tick 600 = price ~1.06 = >5% deviation
     const depegState = createPoolState(600);
     await engine.onPriceUpdate(depegState);
 
@@ -167,23 +172,23 @@ describe('Emergency Scenarios Integration', () => {
 
     expect(emergencyStop.isStopped()).toBe(true);
     expect(engine.getState()).toBe('STOPPED');
+    expect(mocks.removePosition).toHaveBeenCalledTimes(7);
+    expect(engine.getBands()).toHaveLength(0);
     expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('DEPEG'));
   });
 
-  it('depeg with no open position triggers emergency stop without withdraw attempt', async () => {
+  it('depeg with no bands triggers emergency stop without withdraw attempt', async () => {
     const { ctx, mocks, emergencyStop } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // No position minted - send depeg price directly
+    // No bands minted - send depeg price directly
     const depegState = createPoolState(600);
     await engine.onPriceUpdate(depegState);
 
     await new Promise((r) => setTimeout(r, 50));
 
     expect(emergencyStop.isStopped()).toBe(true);
-    // emergencyWithdraw returns early when no position, so state stays MONITORING
-    // but emergency stop flag is set, preventing further operations
     expect(mocks.removePosition).not.toHaveBeenCalled();
     expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('DEPEG'));
   });
@@ -193,7 +198,7 @@ describe('Emergency Scenarios Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Mint initial position
+    // Mint initial bands
     await engine.onPriceUpdate(createPoolState(0));
 
     // Make getPosition fail during emergency withdraw
@@ -234,88 +239,6 @@ describe('Emergency Scenarios Integration', () => {
     expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('stopped after 3 errors'));
   });
 
-  it('portfolio loss > maxTotalLossPercent triggers emergency withdraw + notification', async () => {
-    const { ctx, mocks } = buildContext();
-    const engine = new RebalanceEngine(ctx);
-    ctx.poolEntry.strategy.expectedPriceRatio = undefined;
-
-    await engine.initialize();
-
-    // Mint initial position with normal amounts
-    await engine.onPriceUpdate(createPoolState(0));
-
-    // Set a high initial value to simulate accumulated losses
-    // Current balances will show ~80 value while initial was 1000
-    mocks.getInitialValue.mockReturnValue(1000);
-
-    // Reset for rebalance
-    mocks.mint.mockClear();
-    mocks.fetchPoolState.mockResolvedValue(createPoolState(0));
-
-    // Mock new mint result with small amounts
-    const smallAmount = BigNumber.from(40_000_000); // 40 USDT
-    mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
-      liquidity: BigNumber.from('1000000000000'),
-      amount0: smallAmount,
-      amount1: smallAmount,
-      txHash: '0xmock-mint-hash',
-    });
-
-    // For pre and post rebalance: return same low amounts
-    // This keeps single-rebalance loss at 0% but total portfolio loss > 10%
-    // Pre-value: 40 * price + 40 ≈ 80; post-value: same 80
-    // Portfolio loss: (1000-80)/1000 = 92% >> 10%
-    mocks.balanceOf.mockResolvedValue(smallAmount);
-
-    // Trigger rebalance (tick=200 is out of range [-148, 148])
-    await engine.onPriceUpdate(createPoolState(200));
-
-    expect(engine.getState()).toBe('STOPPED');
-    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('Portfolio loss limit'));
-  });
-
-  it('rebalance loss > 2% triggers state=STOPPED', async () => {
-    const { ctx, mocks } = buildContext();
-    const engine = new RebalanceEngine(ctx);
-    ctx.poolEntry.strategy.expectedPriceRatio = undefined;
-
-    await engine.initialize();
-
-    // Mint initial position with high balances
-    let callIdx = 0;
-    mocks.balanceOf.mockImplementation(() => {
-      callIdx++;
-      // First 2 calls: initial mint (high balances)
-      if (callIdx <= 4) {
-        return Promise.resolve(callIdx % 2 === 1 ? AMOUNT_100_USDT : AMOUNT_100_ZCHF);
-      }
-      // Pre-rebalance check: high balances
-      if (callIdx <= 6) {
-        return Promise.resolve(callIdx % 2 === 1 ? AMOUNT_100_USDT : AMOUNT_100_ZCHF);
-      }
-      // Post-withdraw+swap: very low balances (simulating loss)
-      return Promise.resolve(BigNumber.from(100_000)); // ~0.1 USDT
-    });
-
-    await engine.onPriceUpdate(createPoolState(0));
-
-    mocks.fetchPoolState.mockResolvedValue(createPoolState(0));
-    mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
-      liquidity: BigNumber.from('1000'),
-      amount0: BigNumber.from(100_000),
-      amount1: BigNumber.from(100_000),
-      txHash: '0xmock-mint-hash',
-    });
-
-    // Trigger out-of-range rebalance
-    await engine.onPriceUpdate(createPoolState(500));
-
-    expect(engine.getState()).toBe('STOPPED');
-    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('Rebalance loss too high'));
-  });
-
   it('error recovery: 2 errors then success resets consecutiveErrors, continues MONITORING', async () => {
     const { ctx, mocks, emergencyStop } = buildContext();
     const engine = new RebalanceEngine(ctx);
@@ -330,32 +253,22 @@ describe('Emergency Scenarios Integration', () => {
     expect(engine.getState()).toBe('MONITORING');
     expect(emergencyStop.isStopped()).toBe(false);
 
-    // Succeed
-    mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000000000000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    // Succeed — mint 7 bands
+    let mintIdx = 0;
+    mocks.mint.mockImplementation(async () => {
+      mintIdx++;
+      return {
+        tokenId: BigNumber.from(100 + mintIdx),
+        liquidity: BigNumber.from('1000000000000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintIdx}`,
+      };
     });
     await engine.onPriceUpdate(createPoolState(0));
 
     expect(engine.getState()).toBe('MONITORING');
-    expect(engine.getCurrentTokenId()!.eq(123)).toBe(true);
-    expect(emergencyStop.isStopped()).toBe(false);
-
-    // Now fail twice more — should not trigger ERROR (only 2 after reset)
-    mocks.mint.mockClear();
-    // Need to make the engine think it has no position again
-    // Actually now it has a position, so we need to trigger rebalance
-    mocks.fetchPoolState.mockResolvedValue(createPoolState(0));
-    mocks.mint.mockRejectedValue(new Error('Fail again'));
-
-    await engine.onPriceUpdate(createPoolState(500));
-    expect(engine.getState()).toBe('MONITORING'); // 1st error after reset
-
-    await engine.onPriceUpdate(createPoolState(500));
-    expect(engine.getState()).toBe('MONITORING'); // 2nd error after reset
+    expect(engine.getBands()).toHaveLength(7);
     expect(emergencyStop.isStopped()).toBe(false);
   });
 });

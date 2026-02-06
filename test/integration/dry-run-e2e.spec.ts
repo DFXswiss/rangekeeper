@@ -95,27 +95,31 @@ describe('Dry Run E2E Integration', () => {
     } as any;
   }
 
-  it('DryRunPositionManager + DryRunSwapExecutor in full engine flow: init → mint → rebalance', async () => {
+  it('DryRunPositionManager + DryRunSwapExecutor in full engine flow: init → mint 7 bands → rebalance', async () => {
     const ctx = buildDryRunContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
     expect(engine.getState()).toBe('MONITORING');
 
-    // Initial mint
+    // Initial mint of 7 bands
     await engine.onPriceUpdate(createPoolState(0));
     expect(engine.getState()).toBe('MONITORING');
 
-    const firstTokenId = engine.getCurrentTokenId();
-    expect(firstTokenId).toBeDefined();
-    expect(firstTokenId!.gte(900_000_000)).toBe(true);
+    const bands = engine.getBands();
+    expect(bands).toHaveLength(7);
+    // All virtual token IDs should be >= 900_000_000
+    for (const band of bands) {
+      expect(band.tokenId.gte(900_000_000)).toBe(true);
+    }
 
-    // Trigger rebalance
-    await engine.onPriceUpdate(createPoolState(200));
+    // Trigger rebalance by moving price to band 5 (upper trigger)
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
-    const newTokenId = engine.getCurrentTokenId();
-    expect(newTokenId).toBeDefined();
-    expect(newTokenId!.gt(firstTokenId!)).toBe(true);
+    const newBands = engine.getBands();
+    expect(newBands).toHaveLength(7);
     expect(engine.getState()).toBe('MONITORING');
   });
 
@@ -127,14 +131,16 @@ describe('Dry Run E2E Integration', () => {
     // Before mint: no virtual positions
     expect(dryPM.getVirtualPositions()).toHaveLength(0);
 
-    // After mint
+    // After mint: 7 virtual positions
     await engine.onPriceUpdate(createPoolState(0));
-    expect(dryPM.getVirtualPositions()).toHaveLength(1);
+    expect(dryPM.getVirtualPositions()).toHaveLength(7);
 
-    // After rebalance: old removed, new created
-    await engine.onPriceUpdate(createPoolState(200));
-    expect(dryPM.getVirtualPositions()).toHaveLength(1);
-    expect(dryPM.getVirtualPositions()[0].tokenId.eq(engine.getCurrentTokenId()!)).toBe(true);
+    // After rebalance: 1 removed + 1 created = still 7
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
+    expect(dryPM.getVirtualPositions()).toHaveLength(7);
   });
 
   it('no real contract calls made (approve, mint, swap all simulated)', async () => {
@@ -142,18 +148,17 @@ describe('Dry Run E2E Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Approvals should be dry-run (no-op)
-    // DryRunPositionManager.approveTokens is a no-op
-    // DryRunSwapExecutor.approveTokens is a no-op
-
     await engine.onPriceUpdate(createPoolState(0));
-    await engine.onPriceUpdate(createPoolState(200));
 
-    // The key assertion: no real Contract constructor or tx was called.
-    // DryRunPositionManager never calls super.mint / super.removePosition
-    // DryRunSwapExecutor never calls super.executeSwap
-    // Virtual positions exist to prove simulation happened
-    expect(engine.getCurrentTokenId()!.gte(900_000_000)).toBe(true);
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
+
+    // All token IDs should be virtual (>= 900_000_000)
+    for (const band of engine.getBands()) {
+      expect(band.tokenId.gte(900_000_000)).toBe(true);
+    }
     expect(engine.getState()).toBe('MONITORING');
   });
 });

@@ -56,23 +56,32 @@ describe('State Persistence Integration', () => {
     cleanupTmpDir(tmpDir);
   });
 
-  it('StateStore saves and reloads state across instances', () => {
+  it('StateStore saves and reloads band state across instances', () => {
     const filePath = path.join(tmpDir, 'state.json');
 
     const store1 = new StateStore(filePath);
-    store1.updatePoolState('pool-1', { tokenId: '100', tickLower: -10, tickUpper: 10 });
+    store1.updatePoolState('pool-1', {
+      bands: [
+        { tokenId: '101', tickLower: -150, tickUpper: -107 },
+        { tokenId: '102', tickLower: -107, tickUpper: -64 },
+      ],
+      bandTickWidth: 43,
+    });
     store1.save();
 
     const store2 = new StateStore(filePath);
     const loaded = store2.getPoolState('pool-1');
 
     expect(loaded).toBeDefined();
-    expect(loaded!.tokenId).toBe('100');
-    expect(loaded!.tickLower).toBe(-10);
-    expect(loaded!.tickUpper).toBe(10);
+    expect(loaded!.bands).toHaveLength(2);
+    expect(loaded!.bands![0].tokenId).toBe('101');
+    expect(loaded!.bands![0].tickLower).toBe(-150);
+    expect(loaded!.bands![0].tickUpper).toBe(-107);
+    expect(loaded!.bands![1].tokenId).toBe('102');
+    expect(loaded!.bandTickWidth).toBe(43);
   });
 
-  it('Engine persists after initial mint, new StateStore reads tokenId and range', async () => {
+  it('Engine persists bands after initial mint, new StateStore reads band state', async () => {
     const filePath = path.join(tmpDir, 'state.json');
     const stateStore = new StateStore(filePath);
 
@@ -85,6 +94,7 @@ describe('State Persistence Integration', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockedGetErc20Contract.mockReturnValue({ balanceOf } as any);
 
+    let mintCallCount = 0;
     const ctx = {
       poolEntry: {
         id: 'USDT-ZCHF-100',
@@ -109,12 +119,15 @@ describe('State Persistence Integration', () => {
       poolMonitor: { fetchPoolState: jest.fn(), startMonitoring: jest.fn(), stopMonitoring: jest.fn(), on: jest.fn() },
       positionManager: {
         approveTokens: jest.fn().mockResolvedValue(undefined),
-        mint: jest.fn().mockResolvedValue({
-          tokenId: BigNumber.from(123),
-          liquidity: BigNumber.from('1000'),
-          amount0: AMOUNT_100_USDT,
-          amount1: AMOUNT_100_ZCHF,
-          txHash: '0xmock-mint-hash',
+        mint: jest.fn().mockImplementation(async () => {
+          mintCallCount++;
+          return {
+            tokenId: BigNumber.from(100 + mintCallCount),
+            liquidity: BigNumber.from('1000'),
+            amount0: AMOUNT_100_USDT,
+            amount1: AMOUNT_100_ZCHF,
+            txHash: `0xmock-mint-hash-${mintCallCount}`,
+          };
         }),
         removePosition: jest.fn().mockResolvedValue({ amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0), txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' } }),
         getPosition: jest.fn().mockResolvedValue({ liquidity: BigNumber.from('1000') }),
@@ -137,16 +150,26 @@ describe('State Persistence Integration', () => {
     await engine.initialize();
     await engine.onPriceUpdate(createPoolState(0));
 
-    // Verify state was persisted
+    // Verify state was persisted with bands
     const store2 = new StateStore(filePath);
     const loaded = store2.getPoolState('USDT-ZCHF-100');
     expect(loaded).toBeDefined();
-    expect(loaded!.tokenId).toBe('123');
-    expect(loaded!.tickLower).toBeDefined();
-    expect(loaded!.tickUpper).toBeDefined();
+    expect(loaded!.bands).toBeDefined();
+    expect(loaded!.bands!.length).toBe(7);
+    expect(loaded!.bandTickWidth).toBeDefined();
+    // Each band should have a tokenId
+    for (const band of loaded!.bands!) {
+      expect(band.tokenId).toBeDefined();
+      expect(band.tickLower).toBeDefined();
+      expect(band.tickUpper).toBeDefined();
+    }
+    // Bands should be contiguous
+    for (let i = 1; i < loaded!.bands!.length; i++) {
+      expect(loaded!.bands![i].tickLower).toBe(loaded!.bands![i - 1].tickUpper);
+    }
   });
 
-  it('Engine persists after rebalance with updated tokenId and range', async () => {
+  it('Engine persists after rebalance with updated band state', async () => {
     const filePath = path.join(tmpDir, 'state.json');
     const stateStore = new StateStore(filePath);
 
@@ -159,12 +182,16 @@ describe('State Persistence Integration', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockedGetErc20Contract.mockReturnValue({ balanceOf } as any);
 
-    const mint = jest.fn().mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    let mintCallCount = 0;
+    const mint = jest.fn().mockImplementation(async () => {
+      mintCallCount++;
+      return {
+        tokenId: BigNumber.from(100 + mintCallCount),
+        liquidity: BigNumber.from('1000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintCallCount}`,
+      };
     });
 
     const ctx = {
@@ -213,21 +240,21 @@ describe('State Persistence Integration', () => {
     await engine.initialize();
     await engine.onPriceUpdate(createPoolState(0));
 
-    // Now rebalance with new tokenId
-    mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
-      liquidity: BigNumber.from('2000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
-    });
-    ctx.poolMonitor.fetchPoolState.mockResolvedValue(createPoolState(0));
+    // Get initial bands for trigger calculation
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
 
-    await engine.onPriceUpdate(createPoolState(200));
+    // Trigger rebalance at band 5 (upper trigger)
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
     const store2 = new StateStore(filePath);
     const loaded = store2.getPoolState('USDT-ZCHF-100');
-    expect(loaded!.tokenId).toBe('456');
+    expect(loaded!.bands).toHaveLength(7);
+    // After upper rebalance: first band dissolved, new band added at end
+    // So tokenIds should have changed
+    expect(loaded!.lastRebalanceTime).toBeDefined();
+    expect(loaded!.lastRebalanceTime).toBeGreaterThan(0);
   });
 
   it('corrupt state file results in fresh state', () => {

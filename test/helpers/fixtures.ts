@@ -3,6 +3,7 @@ import JSBI from 'jsbi';
 import { PoolEntry } from '../../src/config';
 import { PoolState } from '../../src/core/pool-monitor';
 import { MintResult, RemoveResult, PositionInfo } from '../../src/core/position-manager';
+import { Band } from '../../src/core/band-manager';
 
 // ---- Token addresses ----
 export const USDT_ADDRESS = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
@@ -114,4 +115,16 @@ export function createPositionInfo(
     tokensOwed0: BigNumber.from(0),
     tokensOwed1: BigNumber.from(0),
   };
+}
+
+export function createBandLayout(centerTick: number, bandCount = 7): Band[] {
+  const bandWidth = 43; // ~0.43% for 3% total / 7
+  const totalHalf = Math.floor((bandCount * bandWidth) / 2);
+  const baseTickLower = centerTick - totalHalf;
+  return Array.from({ length: bandCount }, (_, i) => ({
+    index: i,
+    tokenId: BigNumber.from(100 + i),
+    tickLower: baseTickLower + i * bandWidth,
+    tickUpper: baseTickLower + (i + 1) * bandWidth,
+  }));
 }

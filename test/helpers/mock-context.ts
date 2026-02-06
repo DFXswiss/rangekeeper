@@ -7,7 +7,6 @@ import {
   createPoolEntry,
   AMOUNT_100_USDT,
   AMOUNT_100_ZCHF,
-  WALLET_ADDRESS,
 } from './fixtures';
 import { PoolEntry } from '../../src/config';
 
@@ -27,7 +26,6 @@ export interface MockSet {
   fetchPoolState: jest.Mock;
   startMonitoring: jest.Mock;
   stopMonitoring: jest.Mock;
-  updatePositionRange: jest.Mock;
   poolMonitorOn: jest.Mock;
   poolMonitorEmit: jest.Mock;
 
@@ -87,7 +85,7 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
 
   // Mock wallet
   const mockWallet = {
-    address: WALLET_ADDRESS,
+    address: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
     provider: {
       getNetwork: jest.fn().mockResolvedValue({ chainId: 1 }),
       getBlockNumber: jest.fn().mockResolvedValue(100),
@@ -99,7 +97,6 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
   const fetchPoolState = jest.fn();
   const startMonitoring = jest.fn();
   const stopMonitoring = jest.fn();
-  const updatePositionRange = jest.fn();
   const poolMonitorOn = jest.fn();
   const poolMonitorEmit = jest.fn();
 
@@ -107,7 +104,6 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
     fetchPoolState,
     startMonitoring,
     stopMonitoring,
-    updatePositionRange,
     on: poolMonitorOn,
     emit: poolMonitorEmit,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,12 +111,16 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
 
   // PositionManager mocks
   const approveTokensPM = jest.fn().mockResolvedValue(undefined);
-  const mint = jest.fn().mockResolvedValue({
-    tokenId: BigNumber.from(123),
-    liquidity: BigNumber.from('1000000000000'),
-    amount0: AMOUNT_100_USDT,
-    amount1: AMOUNT_100_ZCHF,
-    txHash: '0xmock-mint-hash',
+  let mintCallCount = 0;
+  const mint = jest.fn().mockImplementation(async () => {
+    mintCallCount++;
+    return {
+      tokenId: BigNumber.from(100 + mintCallCount),
+      liquidity: BigNumber.from('1000000000000'),
+      amount0: AMOUNT_100_USDT,
+      amount1: AMOUNT_100_ZCHF,
+      txHash: `0xmock-mint-hash-${mintCallCount}`,
+    };
   });
   const removePosition = jest.fn().mockResolvedValue({
     amount0: AMOUNT_100_USDT,
@@ -215,10 +215,11 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
 
   // ERC20 balanceOf default
   mockBalanceOf.mockReset();
-  mockBalanceOf.mockResolvedValue(AMOUNT_100_USDT);
-  // Alternate returns: first call USDT, second call ZCHF
-  // For most tests we just return consistent values
-  mockBalanceOf.mockImplementation(() => Promise.resolve(AMOUNT_100_USDT));
+  let balCallCount = 0;
+  mockBalanceOf.mockImplementation(() => {
+    balCallCount++;
+    return Promise.resolve(balCallCount % 2 === 1 ? AMOUNT_100_USDT : AMOUNT_100_ZCHF);
+  });
 
   const ctx: RebalanceContext = {
     poolEntry,
@@ -241,7 +242,6 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
     fetchPoolState,
     startMonitoring,
     stopMonitoring,
-    updatePositionRange,
     poolMonitorOn,
     poolMonitorEmit,
     approveTokensPM,

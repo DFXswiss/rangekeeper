@@ -55,6 +55,65 @@ export function rangeUtilization(tick: number, tickLower: number, tickUpper: num
   return (tick - tickLower) / (tickUpper - tickLower);
 }
 
+export interface BandConfig {
+  index: number;
+  tickLower: number;
+  tickUpper: number;
+}
+
+export interface BandLayout {
+  bands: BandConfig[];
+  bandTickWidth: number;
+  totalTickLower: number;
+  totalTickUpper: number;
+}
+
+export function calculateBands(
+  centerTick: number,
+  rangeWidthPercent: number,
+  feeTier: number,
+  bandCount: number = 7,
+): BandLayout {
+  const tickSpacing = feeToTickSpacing(feeTier);
+
+  const halfWidth = rangeWidthPercent / 2;
+  const tickOffset = Math.floor(Math.log(1 + halfWidth / 100) / Math.log(1.0001));
+  const totalTickRange = tickOffset * 2;
+
+  const rawBandWidth = Math.floor(totalTickRange / bandCount);
+  const bandTickWidth = Math.max(
+    Math.floor(rawBandWidth / tickSpacing) * tickSpacing,
+    tickSpacing,
+  );
+
+  // Center band (index 3 for 7 bands) should contain centerTick
+  const centerBandIndex = Math.floor(bandCount / 2);
+  const alignedCenter = nearestUsableTick(centerTick, tickSpacing);
+  const centerBandLower = alignedCenter - Math.floor(bandTickWidth / 2 / tickSpacing) * tickSpacing;
+  const totalTickLower = centerBandLower - centerBandIndex * bandTickWidth;
+
+  const minTick = Math.ceil(TickMath.MIN_TICK / tickSpacing) * tickSpacing;
+  const maxTick = Math.floor(TickMath.MAX_TICK / tickSpacing) * tickSpacing;
+
+  const bands: BandConfig[] = [];
+  for (let i = 0; i < bandCount; i++) {
+    const tickLower = Math.max(totalTickLower + i * bandTickWidth, minTick);
+    const tickUpper = Math.min(totalTickLower + (i + 1) * bandTickWidth, maxTick);
+    bands.push({ index: i, tickLower, tickUpper });
+  }
+
+  if (bands[bands.length - 1].tickLower >= bands[bands.length - 1].tickUpper) {
+    throw new Error('Band calculation produced invalid range');
+  }
+
+  return {
+    bands,
+    bandTickWidth,
+    totalTickLower: bands[0].tickLower,
+    totalTickUpper: bands[bands.length - 1].tickUpper,
+  };
+}
+
 export function shouldRebalance(
   currentTick: number,
   tickLower: number,
