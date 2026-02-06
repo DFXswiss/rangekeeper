@@ -58,13 +58,17 @@ function buildContext() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockedGetErc20Contract.mockReturnValue({ balanceOf } as any);
 
+  let mintCallCount = 0;
   const mocks = {
-    mint: jest.fn().mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    mint: jest.fn().mockImplementation(async () => {
+      mintCallCount++;
+      return {
+        tokenId: BigNumber.from(100 + mintCallCount),
+        liquidity: BigNumber.from('1000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintCallCount}`,
+      };
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
@@ -80,6 +84,7 @@ function buildContext() {
     isGasSpike: jest.fn().mockReturnValue(false),
     notify: jest.fn().mockResolvedValue(undefined),
     balanceOf,
+    executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(0), txHash: '0xmock-swap-hash' }),
   };
 
   const ctx = {
@@ -93,7 +98,7 @@ function buildContext() {
       getPosition: mocks.getPosition,
       findExistingPositions: mocks.findExistingPositions,
     },
-    swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(0), txHash: '0xmock-swap-hash' }) },
+    swapExecutor: { approveTokens: jest.fn().mockResolvedValue(undefined), executeSwap: mocks.executeSwap },
     emergencyStop: new EmergencyStop(),
     slippageGuard: new SlippageGuard(0.5),
     ilTracker: new ILTracker(),
@@ -114,44 +119,46 @@ describe('Pool Monitor Events Integration', () => {
     jest.clearAllMocks();
   });
 
-  it('priceUpdate event calls engine.onPriceUpdate', async () => {
+  it('priceUpdate event calls engine.onPriceUpdate and mints initial bands', async () => {
     const { ctx, mocks } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Simulate what PoolMonitor would emit
     const state = createPoolState(0);
     await engine.onPriceUpdate(state);
 
-    // Initial mint should have happened
-    expect(mocks.mint).toHaveBeenCalledTimes(1);
+    expect(mocks.mint).toHaveBeenCalledTimes(7);
     expect(engine.getState()).toBe('MONITORING');
+    expect(engine.getBands()).toHaveLength(7);
   });
 
-  it('outOfRange event triggers rebalance', async () => {
+  it('trigger band event triggers band rebalance', async () => {
     const { ctx, mocks } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Mint initial position
+    // Mint initial bands
     await engine.onPriceUpdate(createPoolState(0));
     mocks.mint.mockClear();
     mocks.removePosition.mockClear();
 
     mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
+      tokenId: BigNumber.from(999),
       liquidity: BigNumber.from('1000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
       txHash: '0xmock-mint-hash',
     });
 
-    // Out of range
-    await engine.onPriceUpdate(createPoolState(500));
+    // Price in band 5 (upper trigger)
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
     expect(mocks.removePosition).toHaveBeenCalledTimes(1);
     expect(mocks.mint).toHaveBeenCalledTimes(1);
-    expect(engine.getCurrentTokenId()!.eq(456)).toBe(true);
+    expect(engine.getBands()).toHaveLength(7);
   });
 
   it('error event does not crash engine', async () => {
@@ -159,18 +166,14 @@ describe('Pool Monitor Events Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Simulating an error event — the engine itself doesn't crash
-    // In real usage, PoolMonitor emits 'error' and the main loop catches it
-    // The engine should remain in MONITORING state
     expect(engine.getState()).toBe('MONITORING');
 
-    // Still functional after error
     const state = createPoolState(0);
     await engine.onPriceUpdate(state);
     expect(engine.getState()).toBe('MONITORING');
   });
 
-  it('min rebalance interval skips rebalance if too soon and in-range, proceeds if out-of-range', async () => {
+  it('min rebalance interval skips rebalance if too soon', async () => {
     const { ctx, mocks } = buildContext();
     // Set interval to 60 minutes
     ctx.poolEntry.strategy.minRebalanceIntervalMinutes = 60;
@@ -178,27 +181,16 @@ describe('Pool Monitor Events Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // Mint initial
+    // Mint initial bands
     await engine.onPriceUpdate(createPoolState(0));
     mocks.mint.mockClear();
     mocks.removePosition.mockClear();
 
-    mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
-      liquidity: BigNumber.from('1000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
-    });
-
-    // In-range near edge (triggers shouldRebalance but is in range): should skip due to interval
-    const nearEdgeState = createPoolState(13);
-    await engine.onPriceUpdate(nearEdgeState);
+    // Price in trigger band → should skip due to interval
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
     expect(mocks.removePosition).not.toHaveBeenCalled();
-
-    // Out of range: should proceed regardless of interval
-    await engine.onPriceUpdate(createPoolState(500));
-    expect(mocks.removePosition).toHaveBeenCalledTimes(1);
-    expect(mocks.mint).toHaveBeenCalledTimes(1);
   });
 });

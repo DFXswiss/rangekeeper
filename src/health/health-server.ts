@@ -8,13 +8,19 @@ export interface BotStatus {
   dryRun: boolean;
 }
 
+export interface BandStatus {
+  index: number;
+  tokenId?: number;
+  tickLower?: number;
+  tickUpper?: number;
+}
+
 export interface PoolStatus {
   id: string;
   state: string;
   currentTick?: number;
-  positionTickLower?: number;
-  positionTickUpper?: number;
-  tokenId?: number;
+  bands?: BandStatus[];
+  activeBand?: number;
   lastRebalance?: string;
   portfolioValueUsd?: number;
 }

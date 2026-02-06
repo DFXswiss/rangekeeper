@@ -172,16 +172,13 @@ async function main(): Promise<void> {
 
       // Wire up events
       poolMonitor.on('priceUpdate', (state) => engine.onPriceUpdate(state));
-      poolMonitor.on('outOfRange', (state) => engine.onPriceUpdate(state));
-      poolMonitor.on('approachingBoundary', (state) => engine.onPriceUpdate(state));
       poolMonitor.on('error', (err) => {
         logger.error({ poolId: poolEntry.id, err }, 'Pool monitor error');
         failoverProvider.recordError();
       });
 
       // Start monitoring
-      const currentRange = engine.getCurrentRange();
-      poolMonitor.startMonitoring(currentRange ?? undefined);
+      poolMonitor.startMonitoring();
 
       logger.info({ poolId: poolEntry.id }, 'Engine started');
     } catch (err) {

@@ -44,8 +44,6 @@ function buildContext(overrides: Record<string, any> = {}) {
       minRebalanceIntervalMinutes: 0,
       maxGasCostUsd: 5,
       slippageTolerancePercent: 0.5,
-      expectedPriceRatio: 1.0,
-      depegThresholdPercent: 5,
     },
     monitoring: { checkIntervalSeconds: 30 },
   };
@@ -55,18 +53,22 @@ function buildContext(overrides: Record<string, any> = {}) {
     provider: {},
   };
 
+  let mintCallCount = 0;
   const mocks = {
     fetchPoolState: jest.fn(),
     startMonitoring: jest.fn(),
     stopMonitoring: jest.fn(),
     updatePositionRange: jest.fn(),
     approveTokensPM: jest.fn().mockResolvedValue(undefined),
-    mint: jest.fn().mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000000000000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    mint: jest.fn().mockImplementation(async () => {
+      mintCallCount++;
+      return {
+        tokenId: BigNumber.from(100 + mintCallCount),
+        liquidity: BigNumber.from('1000000000000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintCallCount}`,
+      };
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
@@ -176,15 +178,22 @@ describe('Rebalance Lifecycle Integration', () => {
     expect(mocks.approveTokensPM).toHaveBeenCalledTimes(1);
     expect(mocks.approveTokensSE).toHaveBeenCalledTimes(1);
     expect(mocks.findExistingPositions).toHaveBeenCalledTimes(1);
-    expect(engine.getCurrentTokenId()).toBeUndefined();
+    expect(engine.getBands()).toHaveLength(0);
   });
 
-  it('initialize() with saved state restores tokenId and range without findExisting call', async () => {
+  it('initialize() with saved band state restores bands without findExisting call', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      tokenId: '456',
-      tickLower: -10,
-      tickUpper: 10,
+      bands: [
+        { tokenId: '201', tickLower: -150, tickUpper: -107 },
+        { tokenId: '202', tickLower: -107, tickUpper: -64 },
+        { tokenId: '203', tickLower: -64, tickUpper: -21 },
+        { tokenId: '204', tickLower: -21, tickUpper: 22 },
+        { tokenId: '205', tickLower: 22, tickUpper: 65 },
+        { tokenId: '206', tickLower: 65, tickUpper: 108 },
+        { tokenId: '207', tickLower: 108, tickUpper: 151 },
+      ],
+      bandTickWidth: 43,
       lastRebalanceTime: Date.now() - 60000,
     });
 
@@ -192,12 +201,13 @@ describe('Rebalance Lifecycle Integration', () => {
     await engine.initialize();
 
     expect(engine.getState()).toBe('MONITORING');
-    expect(engine.getCurrentTokenId()!.eq(456)).toBe(true);
-    expect(engine.getCurrentRange()).toEqual({ tickLower: -10, tickUpper: 10 });
+    expect(engine.getBands()).toHaveLength(7);
+    expect(engine.getBands()[0].tokenId.eq(201)).toBe(true);
+    expect(engine.getCurrentRange()).toEqual({ tickLower: -150, tickUpper: 151 });
     expect(mocks.findExistingPositions).not.toHaveBeenCalled();
   });
 
-  it('initialize() finds on-chain position and sets tokenId from chain', async () => {
+  it('initialize() finds on-chain positions and sets bands from chain', async () => {
     const { ctx, mocks } = buildContext();
     mocks.findExistingPositions.mockResolvedValue([
       {
@@ -212,21 +222,21 @@ describe('Rebalance Lifecycle Integration', () => {
     await engine.initialize();
 
     expect(engine.getState()).toBe('MONITORING');
-    expect(engine.getCurrentTokenId()!.eq(789)).toBe(true);
-    expect(engine.getCurrentRange()).toEqual({ tickLower: -20, tickUpper: 20 });
+    expect(engine.getBands()).toHaveLength(1);
+    expect(engine.getBands()[0].tokenId.eq(789)).toBe(true);
   });
 
-  it('onPriceUpdate with no position mints initial, state goes MINTING then MONITORING', async () => {
+  it('onPriceUpdate with no bands mints initial 7 bands', async () => {
     const { ctx, mocks } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    const poolState = createPoolState(0); // tick=0, price ~1.0
+    const poolState = createPoolState(0);
     await engine.onPriceUpdate(poolState);
 
-    expect(mocks.mint).toHaveBeenCalledTimes(1);
+    expect(mocks.mint).toHaveBeenCalledTimes(7);
     expect(engine.getState()).toBe('MONITORING');
-    expect(engine.getCurrentTokenId()!.eq(123)).toBe(true);
+    expect(engine.getBands()).toHaveLength(7);
   });
 
   it('initial mint persists state, logs history(MINT), sends notification, sets IL entry', async () => {
@@ -237,34 +247,24 @@ describe('Rebalance Lifecycle Integration', () => {
     const poolState = createPoolState(0);
     await engine.onPriceUpdate(poolState);
 
-    // State persisted
     expect(mocks.updatePoolState).toHaveBeenCalled();
     expect(mocks.save).toHaveBeenCalled();
-
-    // History logged with MINT type
     expect(mocks.log).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'MINT', poolId: 'USDT-ZCHF-100' }),
+      expect.objectContaining({ type: 'MINT', poolId: 'USDT-ZCHF-100', bandCount: 7 }),
     );
-
-    // Notification sent
-    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('Initial position minted'));
-
-    // IL entry set via balanceTracker
+    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('Initial 7 bands minted'));
     expect(mocks.setInitialValue).toHaveBeenCalled();
   });
 
-  it('onPriceUpdate out-of-range triggers full rebalance cycle', async () => {
+  it('onPriceUpdate in trigger band triggers band rebalance cycle', async () => {
     const { ctx, mocks } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    // First: mint initial position at tick=0
-    const initialState = createPoolState(0);
-    await engine.onPriceUpdate(initialState);
+    // Mint initial bands
+    await engine.onPriceUpdate(createPoolState(0));
+    const initialBands = engine.getBands();
 
-    expect(engine.getCurrentTokenId()!.eq(123)).toBe(true);
-
-    // Reset call counts
     mocks.mint.mockClear();
     mocks.removePosition.mockClear();
     mocks.log.mockClear();
@@ -272,57 +272,26 @@ describe('Rebalance Lifecycle Integration', () => {
     mocks.updatePoolState.mockClear();
     mocks.save.mockClear();
 
-    // Prepare mocks for rebalance: new mint returns tokenId=456
     mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
+      tokenId: BigNumber.from(999),
       liquidity: BigNumber.from('1000000000000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
       txHash: '0xmock-mint-hash',
     });
-    mocks.fetchPoolState.mockResolvedValue(createPoolState(0));
 
-    // Trigger out-of-range: tick=400 is out of [-148,148] but within 5% depeg threshold
-    const outOfRangeState = createPoolState(200);
-    await engine.onPriceUpdate(outOfRangeState);
+    // Price in band 1 (lower trigger)
+    const band1 = initialBands[1];
+    const triggerTick = Math.floor((band1.tickLower + band1.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
-    // Full rebalance should have occurred
     expect(mocks.removePosition).toHaveBeenCalledTimes(1);
-    expect(mocks.fetchPoolState).toHaveBeenCalledTimes(1); // fresh state
     expect(mocks.mint).toHaveBeenCalledTimes(1);
-    expect(engine.getCurrentTokenId()!.eq(456)).toBe(true);
+    expect(engine.getBands()).toHaveLength(7);
     expect(engine.getState()).toBe('MONITORING');
   });
 
-  it('rebalance cycle removes old position, fetches fresh state, mints new position', async () => {
-    const { ctx, mocks } = buildContext();
-    const engine = new RebalanceEngine(ctx);
-    await engine.initialize();
-
-    // Mint initial
-    await engine.onPriceUpdate(createPoolState(0));
-
-    const callOrder: string[] = [];
-    mocks.removePosition.mockImplementation(async () => {
-      callOrder.push('remove');
-      return { amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, fee0: BigNumber.from(0), fee1: BigNumber.from(0), txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' } };
-    });
-    mocks.fetchPoolState.mockImplementation(async () => {
-      callOrder.push('fetchFreshState');
-      return createPoolState(0);
-    });
-    mocks.mint.mockImplementation(async () => {
-      callOrder.push('mint');
-      return { tokenId: BigNumber.from(456), liquidity: BigNumber.from('1000'), amount0: AMOUNT_100_USDT, amount1: AMOUNT_100_ZCHF, txHash: '0xmock-mint-hash' };
-    });
-
-    // Out-of-range triggers rebalance
-    await engine.onPriceUpdate(createPoolState(200));
-
-    expect(callOrder).toEqual(['remove', 'fetchFreshState', 'mint']);
-  });
-
-  it('rebalance persists state, logs history(REBALANCE) with fees and IL, sends notification', async () => {
+  it('rebalance persists state, logs history(REBALANCE) with direction, sends notification', async () => {
     const { ctx, mocks } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
@@ -334,31 +303,29 @@ describe('Rebalance Lifecycle Integration', () => {
     mocks.updatePoolState.mockClear();
     mocks.save.mockClear();
 
-    mocks.fetchPoolState.mockResolvedValue(createPoolState(0));
+    mocks.mint.mockClear();
     mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
+      tokenId: BigNumber.from(999),
       liquidity: BigNumber.from('1000000000000'),
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
       txHash: '0xmock-mint-hash',
     });
 
-    await engine.onPriceUpdate(createPoolState(200));
+    const initialBands = engine.getBands();
+    const band1 = initialBands[1];
+    const triggerTick = Math.floor((band1.tickLower + band1.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
-    // State persisted
     expect(mocks.updatePoolState).toHaveBeenCalled();
     expect(mocks.save).toHaveBeenCalled();
-
-    // History logged
     expect(mocks.log).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'REBALANCE',
         poolId: 'USDT-ZCHF-100',
-        tokenId: '456',
+        direction: 'lower',
       }),
     );
-
-    // Notification sent
-    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('Rebalance completed'));
+    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('Band rebalance completed'));
   });
 });

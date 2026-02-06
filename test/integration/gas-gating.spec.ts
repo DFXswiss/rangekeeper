@@ -52,15 +52,19 @@ function buildContext() {
 
   const wallet = { address: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', provider: {} };
 
+  let mintCallCount = 0;
   const mocks = {
     fetchPoolState: jest.fn(),
     approveTokensPM: jest.fn().mockResolvedValue(undefined),
-    mint: jest.fn().mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000000000000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    mint: jest.fn().mockImplementation(async () => {
+      mintCallCount++;
+      return {
+        tokenId: BigNumber.from(100 + mintCallCount),
+        liquidity: BigNumber.from('1000000000000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintCallCount}`,
+      };
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
@@ -125,21 +129,13 @@ function buildContext() {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function initEngineWithPosition(ctx: any, mocks: any): Promise<RebalanceEngine> {
+async function initEngineWithBands(ctx: any, mocks: any): Promise<RebalanceEngine> {
   const engine = new RebalanceEngine(ctx);
   await engine.initialize();
   await engine.onPriceUpdate(createPoolState(0));
-  // Clear mocks after initial mint
+  // Clear mocks after initial 7-band mint
   mocks.mint.mockClear();
   mocks.removePosition.mockClear();
-  mocks.fetchPoolState.mockResolvedValue(createPoolState(0));
-  mocks.mint.mockResolvedValue({
-    tokenId: BigNumber.from(456),
-    liquidity: BigNumber.from('1000000000000'),
-    amount0: AMOUNT_100_USDT,
-    amount1: AMOUNT_100_ZCHF,
-    txHash: '0xmock-mint-hash',
-  });
   return engine;
 }
 
@@ -148,65 +144,62 @@ describe('Gas Gating Integration', () => {
     jest.clearAllMocks();
   });
 
-  it('gas spike in-range skips rebalance', async () => {
+  it('gas spike in safe zone skips rebalance', async () => {
     const { ctx, mocks } = buildContext();
-    const engine = await initEngineWithPosition(ctx, mocks);
+    const engine = await initEngineWithBands(ctx, mocks);
 
     mocks.isGasSpike.mockReturnValue(true);
 
-    // In-range tick that triggers shouldRebalance (near edge) but still in range
-    // Range is approximately [-15, 15] for 3% width at tick 0
-    // shouldRebalance with 80% threshold triggers at edges (~3 ticks from edge)
-    // But isInRange still returns true if within range
-    const nearEdgeState = createPoolState(13); // near upper boundary but in-range
-    await engine.onPriceUpdate(nearEdgeState);
+    // Price in safe zone (band 3) → no rebalance needed
+    await engine.onPriceUpdate(createPoolState(0));
 
-    // Should not have attempted rebalance
     expect(mocks.removePosition).not.toHaveBeenCalled();
     expect(mocks.mint).not.toHaveBeenCalled();
   });
 
-  it('gas spike out-of-range proceeds with rebalance', async () => {
+  it('gas spike in trigger band proceeds with rebalance', async () => {
     const { ctx, mocks } = buildContext();
-    const engine = await initEngineWithPosition(ctx, mocks);
+    const engine = await initEngineWithBands(ctx, mocks);
 
     mocks.isGasSpike.mockReturnValue(true);
 
-    // Fully out of range
-    const outOfRangeState = createPoolState(500);
-    await engine.onPriceUpdate(outOfRangeState);
+    // Price in trigger band 5 (upper trigger)
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
     expect(mocks.removePosition).toHaveBeenCalled();
     expect(mocks.mint).toHaveBeenCalled();
   });
 
-  it('gas cost > maxGasCostUsd in-range skips rebalance', async () => {
+  it('gas cost > maxGasCostUsd in safe zone skips rebalance', async () => {
     const { ctx, mocks } = buildContext();
-    const engine = await initEngineWithPosition(ctx, mocks);
+    const engine = await initEngineWithBands(ctx, mocks);
 
-    // maxGasCostUsd = 5, set gas price very high
-    // estimateGasCostUsd(800000, gasPriceGwei, 3000) > 5
-    // gasPriceGwei = 5 / (800000/1e9 * 3000) = 5 / 2.4 ≈ 2.08 → need > 2.08 gwei
-    // 100 gwei → cost = 800000 * 100 / 1e9 * 3000 = 240 USD >> 5
+    // High gas price
     mocks.getGasInfo.mockResolvedValue({ gasPriceGwei: 100, isEip1559: false });
     mocks.isGasSpike.mockReturnValue(false);
 
-    const nearEdgeState = createPoolState(13);
-    await engine.onPriceUpdate(nearEdgeState);
+    // Safe zone → no rebalance needed regardless of gas
+    await engine.onPriceUpdate(createPoolState(0));
 
     expect(mocks.removePosition).not.toHaveBeenCalled();
     expect(mocks.mint).not.toHaveBeenCalled();
   });
 
-  it('gas cost > maxGasCostUsd out-of-range proceeds with rebalance', async () => {
+  it('gas cost > maxGasCostUsd in trigger band proceeds with rebalance', async () => {
     const { ctx, mocks } = buildContext();
-    const engine = await initEngineWithPosition(ctx, mocks);
+    const engine = await initEngineWithBands(ctx, mocks);
 
     mocks.getGasInfo.mockResolvedValue({ gasPriceGwei: 100, isEip1559: false });
     mocks.isGasSpike.mockReturnValue(false);
 
-    const outOfRangeState = createPoolState(500);
-    await engine.onPriceUpdate(outOfRangeState);
+    // Trigger band
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
     expect(mocks.removePosition).toHaveBeenCalled();
     expect(mocks.mint).toHaveBeenCalled();
@@ -214,21 +207,15 @@ describe('Gas Gating Integration', () => {
 
   it('gas oracle throws proceeds with rebalance (fallback)', async () => {
     const { ctx, mocks } = buildContext();
-    const engine = await initEngineWithPosition(ctx, mocks);
+    const engine = await initEngineWithBands(ctx, mocks);
 
     mocks.getGasInfo.mockRejectedValue(new Error('RPC error'));
 
-    const nearEdgeState = createPoolState(13);
-    await engine.onPriceUpdate(nearEdgeState);
-
-    // checkGasCost catches the error and returns true (proceed)
-    // This only matters if shouldRebalance triggers — let's use out-of-range to be sure
-    mocks.getGasInfo.mockRejectedValue(new Error('RPC error'));
-    mocks.removePosition.mockClear();
-    mocks.mint.mockClear();
-
-    const outOfRangeState = createPoolState(500);
-    await engine.onPriceUpdate(outOfRangeState);
+    // Trigger band
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
     expect(mocks.removePosition).toHaveBeenCalled();
     expect(mocks.mint).toHaveBeenCalled();

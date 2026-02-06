@@ -62,13 +62,17 @@ function buildContext(overrides: Record<string, any> = {}) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockedGetErc20Contract.mockReturnValue({ balanceOf } as any);
 
+  let mintCallCount = 0;
   const mocks = {
-    mint: jest.fn().mockResolvedValue({
-      tokenId: BigNumber.from(123),
-      liquidity: BigNumber.from('1000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
+    mint: jest.fn().mockImplementation(async () => {
+      mintCallCount++;
+      return {
+        tokenId: BigNumber.from(100 + mintCallCount),
+        liquidity: BigNumber.from('1000'),
+        amount0: AMOUNT_100_USDT,
+        amount1: AMOUNT_100_ZCHF,
+        txHash: `0xmock-mint-hash-${mintCallCount}`,
+      };
     }),
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
@@ -119,7 +123,7 @@ describe('Notification Flow Integration', () => {
     jest.clearAllMocks();
   });
 
-  it('initial mint notification contains tokenId, range, and price', async () => {
+  it('initial mint notification contains band count, range, and band width', async () => {
     const { ctx, mocks } = buildContext();
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
@@ -128,13 +132,12 @@ describe('Notification Flow Integration', () => {
 
     expect(mocks.notify).toHaveBeenCalledTimes(1);
     const msg = mocks.notify.mock.calls[0][0] as string;
-    expect(msg).toContain('Initial position minted');
-    expect(msg).toContain('TokenId: 123');
+    expect(msg).toContain('Initial 7 bands minted');
     expect(msg).toContain('Range:');
-    expect(msg).toContain('Price:');
+    expect(msg).toContain('Band width:');
   });
 
-  it('rebalance notification contains new tokenId, range, and IL%', async () => {
+  it('rebalance notification contains direction, dissolved band, and new band info', async () => {
     const { ctx, mocks } = buildContext();
     // Disable depeg for rebalance test
     ctx.poolEntry.strategy.expectedPriceRatio = undefined;
@@ -146,25 +149,21 @@ describe('Notification Flow Integration', () => {
     await engine.onPriceUpdate(createPoolState(0));
     mocks.notify.mockClear();
 
-    mocks.mint.mockResolvedValue({
-      tokenId: BigNumber.from(456),
-      liquidity: BigNumber.from('1000'),
-      amount0: AMOUNT_100_USDT,
-      amount1: AMOUNT_100_ZCHF,
-      txHash: '0xmock-mint-hash',
-    });
-
-    // Trigger rebalance
-    await engine.onPriceUpdate(createPoolState(200));
+    // Trigger rebalance at band 5 (upper trigger)
+    const bands = engine.getBands();
+    const band5 = bands[5];
+    const triggerTick = Math.floor((band5.tickLower + band5.tickUpper) / 2);
+    await engine.onPriceUpdate(createPoolState(triggerTick));
 
     // Find the rebalance notification
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const calls = mocks.notify.mock.calls.map((c: any[]) => c[0] as string);
-    const rebalanceMsg = calls.find((m: string) => m.includes('Rebalance completed'));
+    const rebalanceMsg = calls.find((m: string) => m.includes('Band rebalance completed'));
     expect(rebalanceMsg).toBeDefined();
-    expect(rebalanceMsg).toContain('New TokenId: 456');
-    expect(rebalanceMsg).toContain('New Range:');
-    expect(rebalanceMsg).toContain('IL:');
+    expect(rebalanceMsg).toContain('Direction:');
+    expect(rebalanceMsg).toContain('Dissolved:');
+    expect(rebalanceMsg).toContain('New band:');
+    expect(rebalanceMsg).toContain('Overall range:');
   });
 
   it('depeg notification contains current price, deviation%, and action', async () => {

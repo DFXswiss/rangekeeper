@@ -53,17 +53,13 @@ export class PoolMonitor extends EventEmitter {
     return state;
   }
 
-  startMonitoring(positionRange?: PositionRange): void {
+  startMonitoring(): void {
     this.logger.info({ poolId: this.poolId, intervalMs: this.checkIntervalMs }, 'Starting pool monitoring');
 
     this.intervalHandle = setInterval(async () => {
       try {
         const state = await this.fetchPoolState();
         this.emit('priceUpdate', state);
-
-        if (positionRange) {
-          this.checkRange(state, positionRange);
-        }
       } catch (err) {
         this.logger.error({ poolId: this.poolId, err }, 'Error polling pool state');
         this.emit('error', err);
@@ -79,38 +75,7 @@ export class PoolMonitor extends EventEmitter {
     }
   }
 
-  updatePositionRange(range: PositionRange): void {
-    this.stopMonitoring();
-    this.startMonitoring(range);
-  }
-
   getLastState(): PoolState | undefined {
     return this.lastState;
-  }
-
-  private checkRange(state: PoolState, range: PositionRange): void {
-    const { tick } = state;
-    const { tickLower, tickUpper } = range;
-    const rangeWidth = tickUpper - tickLower;
-
-    if (tick < tickLower || tick >= tickUpper) {
-      this.logger.warn({ poolId: this.poolId, tick, tickLower, tickUpper }, 'Price OUT OF RANGE');
-      this.emit('outOfRange', state, range);
-      return;
-    }
-
-    const distToLower = tick - tickLower;
-    const distToUpper = tickUpper - tick;
-    const minDist = Math.min(distToLower, distToUpper);
-    const percentFromEdge = (minDist / rangeWidth) * 100;
-
-    if (percentFromEdge < 20) {
-      const boundary = distToLower < distToUpper ? 'lower' : 'upper';
-      this.logger.info(
-        { poolId: this.poolId, tick, boundary, percentFromEdge: percentFromEdge.toFixed(1) },
-        'Approaching range boundary',
-      );
-      this.emit('approachingBoundary', state, range, boundary);
-    }
   }
 }
