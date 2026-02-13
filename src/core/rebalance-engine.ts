@@ -20,7 +20,15 @@ import { tickToPrice } from '../util/tick-math';
 import { Wallet } from 'ethers';
 import { BandManager, Band, TriggerDirection } from './band-manager';
 
-export type RebalanceState = 'IDLE' | 'MONITORING' | 'EVALUATING' | 'WITHDRAWING' | 'SWAPPING' | 'MINTING' | 'ERROR' | 'STOPPED';
+export type RebalanceState =
+  | 'IDLE'
+  | 'MONITORING'
+  | 'EVALUATING'
+  | 'WITHDRAWING'
+  | 'SWAPPING'
+  | 'MINTING'
+  | 'ERROR'
+  | 'STOPPED';
 
 const REBALANCE_GAS_ESTIMATE = 800_000;
 const ETH_PRICE_USD_FALLBACK = 3000;
@@ -102,7 +110,10 @@ export class RebalanceEngine {
         try {
           const receipt = await provider.getTransactionReceipt(hash);
           if (receipt) {
-            this.logger.info({ txHash: hash, status: receipt.status }, receipt.status === 1 ? 'Pending TX confirmed' : 'Pending TX reverted');
+            this.logger.info(
+              { txHash: hash, status: receipt.status },
+              receipt.status === 1 ? 'Pending TX confirmed' : 'Pending TX reverted',
+            );
           } else {
             this.logger.warn({ txHash: hash }, 'Pending TX not found on-chain');
           }
@@ -119,9 +130,17 @@ export class RebalanceEngine {
 
     // Recover from incomplete rebalance
     if (savedState?.rebalanceStage) {
-      this.logger.warn({ poolId: poolEntry.id, stage: savedState.rebalanceStage }, 'Recovering from incomplete rebalance');
+      this.logger.warn(
+        { poolId: poolEntry.id, stage: savedState.rebalanceStage },
+        'Recovering from incomplete rebalance',
+      );
       this.bandManager.setBands([], 0);
-      stateStore.updatePoolState(poolEntry.id, { rebalanceStage: undefined, pendingTxHashes: undefined, bands: undefined, bandTickWidth: undefined });
+      stateStore.updatePoolState(poolEntry.id, {
+        rebalanceStage: undefined,
+        pendingTxHashes: undefined,
+        bands: undefined,
+        bandTickWidth: undefined,
+      });
       stateStore.save();
       await notifier.notify(`RECOVERY: ${poolEntry.id} recovering from stage ${savedState.rebalanceStage}`);
     }
@@ -145,9 +164,10 @@ export class RebalanceEngine {
             tickUpper: p.tickUpper,
           }));
         if (activeBands.length > 0) {
-          const bandWidth = activeBands.length > 1
-            ? activeBands[1].tickLower - activeBands[0].tickLower
-            : activeBands[0].tickUpper - activeBands[0].tickLower;
+          const bandWidth =
+            activeBands.length > 1
+              ? activeBands[1].tickLower - activeBands[0].tickLower
+              : activeBands[0].tickUpper - activeBands[0].tickLower;
           this.bandManager.setBands(activeBands, bandWidth);
           this.logger.info({ bandCount: activeBands.length }, 'Found existing on-chain positions as bands');
         }
@@ -164,6 +184,11 @@ export class RebalanceEngine {
   async onPriceUpdate(poolState: PoolState): Promise<void> {
     if (this.state === 'STOPPED' || this.state === 'ERROR') return;
     if (this.state !== 'MONITORING' && this.state !== 'IDLE') return;
+    if (this.rebalanceLock) return;
+    if (this.ctx.emergencyStop.isStopped()) {
+      this.setState('STOPPED');
+      return;
+    }
 
     const { poolEntry } = this.ctx;
 
@@ -180,7 +205,7 @@ export class RebalanceEngine {
     });
 
     // Check depeg
-    if (this.checkDepeg(poolState)) return;
+    if (await this.checkDepeg(poolState)) return;
 
     // No bands yet → mint initial bands
     if (this.bandManager.getBandCount() === 0) {
@@ -198,33 +223,45 @@ export class RebalanceEngine {
     }
   }
 
-  private checkDepeg(poolState: PoolState): boolean {
+  private async checkDepeg(poolState: PoolState): Promise<boolean> {
     const { poolEntry, emergencyStop, notifier } = this.ctx;
     const { strategy } = poolEntry;
 
     if (!strategy.expectedPriceRatio) return false;
 
     const currentPrice = tickToPrice(poolState.tick);
-    const deviation = Math.abs(currentPrice - strategy.expectedPriceRatio) / strategy.expectedPriceRatio * 100;
+    const deviation = (Math.abs(currentPrice - strategy.expectedPriceRatio) / strategy.expectedPriceRatio) * 100;
     const threshold = strategy.depegThresholdPercent ?? 5;
 
     if (deviation > threshold) {
       this.logger.error(
-        { poolId: poolEntry.id, currentPrice, expectedPrice: strategy.expectedPriceRatio, deviation: deviation.toFixed(2) },
+        {
+          poolId: poolEntry.id,
+          currentPrice,
+          expectedPrice: strategy.expectedPriceRatio,
+          deviation: deviation.toFixed(2),
+        },
         'TOKEN DEPEG DETECTED',
       );
-      emergencyStop.trigger(`Token depeg: price ${currentPrice.toFixed(6)} deviates ${deviation.toFixed(2)}% from expected ${strategy.expectedPriceRatio}`);
-      notifier.notify(
-        `ALERT: DEPEG detected for ${poolEntry.id}!\n` +
-          `Current price: ${currentPrice.toFixed(6)}\n` +
-          `Expected: ${strategy.expectedPriceRatio}\n` +
-          `Deviation: ${deviation.toFixed(2)}%\n` +
-          `Action: closing all bands and stopping bot`,
-      ).catch(() => {});
+      emergencyStop.trigger(
+        `Token depeg: price ${currentPrice.toFixed(6)} deviates ${deviation.toFixed(2)}% from expected ${strategy.expectedPriceRatio}`,
+        'depeg',
+      );
+      notifier
+        .notify(
+          `ALERT: DEPEG detected for ${poolEntry.id}!\n` +
+            `Current price: ${currentPrice.toFixed(6)}\n` +
+            `Expected: ${strategy.expectedPriceRatio}\n` +
+            `Deviation: ${deviation.toFixed(2)}%\n` +
+            `Action: closing all bands and stopping bot`,
+        )
+        .catch(() => {});
 
-      this.emergencyWithdraw().catch((err) => {
+      try {
+        await this.emergencyWithdraw();
+      } catch (err) {
         this.logger.error({ err }, 'Failed emergency withdraw on depeg');
-      });
+      }
       return true;
     }
 
@@ -264,11 +301,13 @@ export class RebalanceEngine {
       this.persistState(stateStore, poolEntry.id);
     } catch (err) {
       this.logger.error({ err }, 'Emergency withdraw failed');
-      await notifier.notify(
-        `CRITICAL: Emergency withdraw FAILED for ${poolEntry.id}!\n` +
-          `Error: ${err instanceof Error ? err.message : String(err)}\n` +
-          `Manual intervention required immediately`,
-      ).catch(() => {});
+      await notifier
+        .notify(
+          `CRITICAL: Emergency withdraw FAILED for ${poolEntry.id}!\n` +
+            `Error: ${err instanceof Error ? err.message : String(err)}\n` +
+            `Manual intervention required immediately`,
+        )
+        .catch(() => {});
     } finally {
       this.rebalanceLock = false;
     }
@@ -319,7 +358,8 @@ export class RebalanceEngine {
   }
 
   private async mintInitialBands(poolState: PoolState): Promise<void> {
-    const { poolEntry, wallet, positionManager, balanceTracker, ilTracker, stateStore, historyLogger, notifier } = this.ctx;
+    const { poolEntry, wallet, positionManager, balanceTracker, ilTracker, stateStore, historyLogger, notifier } =
+      this.ctx;
     const { pool, strategy } = poolEntry;
 
     this.rebalanceLock = true;
@@ -341,11 +381,16 @@ export class RebalanceEngine {
 
       for (let i = 0; i < bandCount; i++) {
         const bandConfig = layout.bands[i];
-        // Equal share per band
-        const amount0 = totalBalance0.div(bandCount - i);
-        const amount1 = totalBalance1.div(bandCount - i);
+        const remainingBands = bandCount - i;
 
-        // Recalculate remaining for next iteration
+        // Re-read actual remaining wallet balance after each mint
+        const [remaining0, remaining1] = await Promise.all([
+          token0Contract.balanceOf(wallet.address),
+          token1Contract.balanceOf(wallet.address),
+        ]);
+        const amount0 = remaining0.div(remainingBands);
+        const amount1 = remaining1.div(remainingBands);
+
         const result = await positionManager.mint({
           token0: pool.token0.address,
           token1: pool.token1.address,
@@ -376,7 +421,13 @@ export class RebalanceEngine {
       const bal1 = parseFloat(totalBalance1.toString()) / Math.pow(10, pool.token1.decimals);
       ilTracker.setEntry(bal0, bal1, currentPrice);
 
-      const initialValue = this.estimatePortfolioValue(totalBalance0, totalBalance1, pool.token0.decimals, pool.token1.decimals, currentPrice);
+      const initialValue = this.estimatePortfolioValue(
+        totalBalance0,
+        totalBalance1,
+        pool.token0.decimals,
+        pool.token1.decimals,
+        currentPrice,
+      );
       balanceTracker.setInitialValue(initialValue);
       this.logger.info({ initialValueUsd: initialValue.toFixed(2) }, 'Initial portfolio value set');
 
@@ -405,7 +456,8 @@ export class RebalanceEngine {
   }
 
   private async executeBandRebalance(poolState: PoolState, direction: TriggerDirection): Promise<void> {
-    const { poolEntry, wallet, positionManager, swapExecutor, emergencyStop, balanceTracker, stateStore, historyLogger, notifier } = this.ctx;
+    const { poolEntry, wallet, positionManager, swapExecutor, emergencyStop, stateStore, historyLogger, notifier } =
+      this.ctx;
     const { pool, strategy } = poolEntry;
 
     // Check min interval
@@ -431,16 +483,6 @@ export class RebalanceEngine {
     this.logger.info({ poolId: poolEntry.id, tick: poolState.tick, direction }, 'Starting band rebalance');
 
     try {
-      // Pre-rebalance value estimation
-      const preToken0 = getErc20Contract(pool.token0.address, wallet);
-      const preToken1 = getErc20Contract(pool.token1.address, wallet);
-      const [preBal0, preBal1] = await Promise.all([
-        preToken0.balanceOf(wallet.address),
-        preToken1.balanceOf(wallet.address),
-      ]);
-      const prePrice = tickToPrice(poolState.tick);
-      const preValue = this.estimatePortfolioValue(preBal0, preBal1, pool.token0.decimals, pool.token1.decimals, prePrice);
-
       // STEP 1: Dissolve the opposite band
       this.setState('WITHDRAWING');
       const bandToDissolve = this.bandManager.getBandToDissolve(direction);
@@ -448,16 +490,24 @@ export class RebalanceEngine {
 
       const pos = await positionManager.getPosition(bandToDissolve.tokenId);
       if (!pos.liquidity.isZero()) {
-        removeResult = await positionManager.removePosition(bandToDissolve.tokenId, pos.liquidity, strategy.slippageTolerancePercent);
+        removeResult = await positionManager.removePosition(
+          bandToDissolve.tokenId,
+          pos.liquidity,
+          strategy.slippageTolerancePercent,
+        );
       }
 
       this.bandManager.removeBand(bandToDissolve.tokenId);
 
       // Checkpoint: band dissolved, funds in wallet
-      this.persistCheckpoint(stateStore, poolEntry.id, 'WITHDRAWN',
+      this.persistCheckpoint(
+        stateStore,
+        poolEntry.id,
+        'WITHDRAWN',
         removeResult?.txHashes
           ? [removeResult.txHashes.decreaseLiquidity, removeResult.txHashes.collect, removeResult.txHashes.burn]
-          : []);
+          : [],
+      );
 
       // STEP 2: Swap through own pool (6 remaining bands provide liquidity)
       this.setState('SWAPPING');
@@ -467,6 +517,16 @@ export class RebalanceEngine {
         token0Contract.balanceOf(wallet.address),
         token1Contract.balanceOf(wallet.address),
       ]);
+
+      // Pre-swap value: dissolved band tokens + wallet dust (meaningful baseline for loss check)
+      const preSwapPrice = tickToPrice(poolState.tick);
+      const preSwapValue = this.estimatePortfolioValue(
+        balance0,
+        balance1,
+        pool.token0.decimals,
+        pool.token1.decimals,
+        preSwapPrice,
+      );
 
       let swapResult: SwapResult | undefined;
       // When price goes lower: dissolved top band yields token0, we need token1 for new bottom band
@@ -490,8 +550,7 @@ export class RebalanceEngine {
       }
 
       // Checkpoint: swap completed
-      this.persistCheckpoint(stateStore, poolEntry.id, 'SWAPPED',
-        swapResult ? [swapResult.txHash] : []);
+      this.persistCheckpoint(stateStore, poolEntry.id, 'SWAPPED', swapResult ? [swapResult.txHash] : []);
 
       // STEP 3: Mint new band at the opposite end
       this.setState('MINTING');
@@ -522,30 +581,24 @@ export class RebalanceEngine {
       this.lastRebalanceTime = Date.now();
       this.consecutiveErrors = 0;
 
-      // Post-rebalance value check
-      const currentPrice = tickToPrice(poolState.tick);
-      const postValue = this.estimatePortfolioValue(newBal0, newBal1, pool.token0.decimals, pool.token1.decimals, currentPrice);
+      // Post-swap value check: compare value before swap (dissolved band) with value after swap
+      const postSwapPrice = tickToPrice(poolState.tick);
+      const postSwapValue = this.estimatePortfolioValue(
+        newBal0,
+        newBal1,
+        pool.token0.decimals,
+        pool.token1.decimals,
+        postSwapPrice,
+      );
 
-      if (preValue > 0 && postValue > 0 && emergencyStop.checkRebalanceLoss(preValue, postValue)) {
+      if (preSwapValue > 0 && postSwapValue > 0 && emergencyStop.checkRebalanceLoss(preSwapValue, postSwapValue)) {
         await notifier.notify(
-          `ALERT: Rebalance loss too high for ${poolEntry.id}!\n` +
-            `Pre: $${preValue.toFixed(2)} → Post: $${postValue.toFixed(2)}\n` +
-            `Loss: ${(((preValue - postValue) / preValue) * 100).toFixed(2)}%\n` +
+          `ALERT: Rebalance swap loss too high for ${poolEntry.id}!\n` +
+            `Pre-swap: $${preSwapValue.toFixed(2)} → Post-swap: $${postSwapValue.toFixed(2)}\n` +
+            `Loss: ${(((preSwapValue - postSwapValue) / preSwapValue) * 100).toFixed(2)}%\n` +
             `Action: pausing bot`,
         );
         this.setState('STOPPED');
-        return;
-      }
-
-      const initialValue = balanceTracker.getInitialValue();
-      if (initialValue && emergencyStop.checkPortfolioLoss(postValue, initialValue, this.ctx.maxTotalLossPercent)) {
-        await this.emergencyWithdraw();
-        await notifier.notify(
-          `ALERT: Portfolio loss limit reached for ${poolEntry.id}!\n` +
-            `Initial: $${initialValue.toFixed(2)} → Current: $${postValue.toFixed(2)}\n` +
-            `Loss: ${(((initialValue - postValue) / initialValue) * 100).toFixed(2)}%\n` +
-            `Action: all bands closed, bot stopped`,
-        );
         return;
       }
 
@@ -599,8 +652,10 @@ export class RebalanceEngine {
 
     if (this.consecutiveErrors >= 3) {
       this.setState('ERROR');
-      this.ctx.emergencyStop.trigger(`${this.consecutiveErrors} consecutive errors: ${message}`);
-      this.ctx.notifier.notify(`ALERT: ${this.ctx.poolEntry.id} stopped after ${this.consecutiveErrors} errors: ${message}`).catch(() => {});
+      this.ctx.emergencyStop.trigger(`${this.consecutiveErrors} consecutive errors: ${message}`, 'tx-error');
+      this.ctx.notifier
+        .notify(`ALERT: ${this.ctx.poolEntry.id} stopped after ${this.consecutiveErrors} errors: ${message}`)
+        .catch(() => {});
     } else {
       this.setState('MONITORING');
     }
