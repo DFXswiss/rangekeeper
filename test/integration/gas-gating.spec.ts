@@ -104,7 +104,12 @@ function buildContext() {
   const ctx = {
     poolEntry,
     wallet,
-    poolMonitor: { fetchPoolState: mocks.fetchPoolState, startMonitoring: jest.fn(), stopMonitoring: jest.fn(), on: jest.fn() },
+    poolMonitor: {
+      fetchPoolState: mocks.fetchPoolState,
+      startMonitoring: jest.fn(),
+      stopMonitoring: jest.fn(),
+      on: jest.fn(),
+    },
     positionManager: {
       approveTokens: mocks.approveTokensPM,
       mint: mocks.mint,
@@ -116,9 +121,19 @@ function buildContext() {
     emergencyStop: new EmergencyStop(),
     slippageGuard: new SlippageGuard(0.5),
     ilTracker: new ILTracker(),
-    balanceTracker: { setInitialValue: mocks.setInitialValue, getInitialValue: mocks.getInitialValue, getLossPercent: mocks.getLossPercent },
+    balanceTracker: {
+      setInitialValue: mocks.setInitialValue,
+      getInitialValue: mocks.getInitialValue,
+      getLossPercent: mocks.getLossPercent,
+    },
     gasOracle: { getGasInfo: mocks.getGasInfo, isGasSpike: mocks.isGasSpike },
-    stateStore: { getPoolState: mocks.getPoolState, updatePoolState: mocks.updatePoolState, save: mocks.save, saveOrThrow: jest.fn(), getState: jest.fn() },
+    stateStore: {
+      getPoolState: mocks.getPoolState,
+      updatePoolState: mocks.updatePoolState,
+      save: mocks.save,
+      saveOrThrow: jest.fn(),
+      getState: jest.fn(),
+    },
     historyLogger: { log: mocks.log },
     notifier: { notify: mocks.notify },
     maxTotalLossPercent: 10,

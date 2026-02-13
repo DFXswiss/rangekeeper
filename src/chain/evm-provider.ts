@@ -90,7 +90,9 @@ export function getWallet(privateKey: string, provider: providers.JsonRpcProvide
   return new ethers.Wallet(privateKey, provider);
 }
 
-export async function verifyConnection(provider: providers.JsonRpcProvider): Promise<{ chainId: number; blockNumber: number }> {
+export async function verifyConnection(
+  provider: providers.JsonRpcProvider,
+): Promise<{ chainId: number; blockNumber: number }> {
   const logger = getLogger();
   const [network, blockNumber] = await Promise.all([provider.getNetwork(), provider.getBlockNumber()]);
   logger.info({ chainId: network.chainId, blockNumber }, 'Connected to chain');

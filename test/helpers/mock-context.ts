@@ -3,11 +3,7 @@ import { RebalanceContext } from '../../src/core/rebalance-engine';
 import { EmergencyStop } from '../../src/risk/emergency-stop';
 import { SlippageGuard } from '../../src/risk/slippage-guard';
 import { ILTracker } from '../../src/risk/il-tracker';
-import {
-  createPoolEntry,
-  AMOUNT_100_USDT,
-  AMOUNT_100_ZCHF,
-} from './fixtures';
+import { createPoolEntry, AMOUNT_100_USDT, AMOUNT_100_ZCHF } from './fixtures';
 import { PoolEntry } from '../../src/config';
 
 // Module-level mock for getErc20Contract

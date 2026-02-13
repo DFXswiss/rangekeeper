@@ -28,9 +28,7 @@ export function loadEnvConfig(): EnvConfig {
 
   const result = envSchema.safeParse(process.env);
   if (!result.success) {
-    const formatted = result.error.issues
-      .map((i) => `  ${i.path.join('.')}: ${i.message}`)
-      .join('\n');
+    const formatted = result.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Environment validation failed:\n${formatted}`);
   }
 
