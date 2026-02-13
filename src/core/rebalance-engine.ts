@@ -322,11 +322,13 @@ export class RebalanceEngine {
           )
           .catch(() => {});
       } else {
-        await notifier.notify(
-          `EMERGENCY: All ${totalBands} bands closed for ${poolEntry.id}\n` +
-            `Reason: ${this.ctx.emergencyStop.getReason() ?? 'unknown'}\n` +
-            `Action: bot stopped, manual intervention required`,
-        );
+        await notifier
+          .notify(
+            `EMERGENCY: All ${totalBands} bands closed for ${poolEntry.id}\n` +
+              `Reason: ${this.ctx.emergencyStop.getReason() ?? 'unknown'}\n` +
+              `Action: bot stopped, manual intervention required`,
+          )
+          .catch(() => {});
       }
     } catch (err) {
       this.logger.error({ err }, 'Emergency withdraw failed');
