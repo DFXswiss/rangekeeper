@@ -1,7 +1,7 @@
 import { Contract, BigNumber, Wallet, ContractTransaction, constants } from 'ethers';
 import { getLogger } from '../util/logger';
 import { getSwapRouterContract, getErc20Contract, ensureApproval } from '../chain/contracts';
-import { withRetry } from '../util/retry';
+import { withRetry, NonRetryableError } from '../util/retry';
 import { NonceTracker } from '../chain/nonce-tracker';
 
 export type WalletProvider = () => Wallet;
@@ -51,10 +51,16 @@ export class SwapExecutor {
     const w = this.wallet;
     const router = this.router;
 
-    this.logger.info(
-      { tokenIn, tokenOut, feeTier, amountIn: amountIn.toString(), slippagePercent },
-      'Executing swap',
-    );
+    this.logger.info({ tokenIn, tokenOut, feeTier, amountIn: amountIn.toString(), slippagePercent }, 'Executing swap');
+
+    // Verify wallet has sufficient balance before submitting swap
+    const tokenInContract = getErc20Contract(tokenIn, w);
+    const balance: BigNumber = await tokenInContract.balanceOf(w.address);
+    if (balance.lt(amountIn)) {
+      throw new NonRetryableError(
+        `Insufficient balance for swap: have ${balance.toString()} but need ${amountIn.toString()} of ${tokenIn}`,
+      );
+    }
 
     // For stablecoin pairs, we expect ~1:1 ratio, so min out is based on slippage
     const slippageMul = Math.floor((1 - slippagePercent / 100) * 10000);
@@ -63,15 +69,18 @@ export class SwapExecutor {
     const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
       () =>
-        router.exactInputSingle({
-          tokenIn,
-          tokenOut,
-          fee: feeTier,
-          recipient: w.address,
-          amountIn,
-          amountOutMinimum,
-          sqrtPriceLimitX96: 0,
-        }, nonceOverride),
+        router.exactInputSingle(
+          {
+            tokenIn,
+            tokenOut,
+            fee: feeTier,
+            recipient: w.address,
+            amountIn,
+            amountOutMinimum,
+            sqrtPriceLimitX96: 0,
+          },
+          nonceOverride,
+        ),
       'swap',
     );
 
@@ -89,7 +98,10 @@ export class SwapExecutor {
     );
 
     if (!transferLog) {
-      this.logger.error({ txHash: receipt.transactionHash, logsCount: receipt.logs?.length }, 'Transfer event not found in swap receipt');
+      this.logger.error(
+        { txHash: receipt.transactionHash, logsCount: receipt.logs?.length },
+        'Transfer event not found in swap receipt',
+      );
       throw new Error(`Swap succeeded but Transfer event not found for output token (tx: ${receipt.transactionHash})`);
     }
 

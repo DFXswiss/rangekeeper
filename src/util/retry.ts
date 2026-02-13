@@ -1,5 +1,12 @@
 import { getLogger } from './logger';
 
+export class NonRetryableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NonRetryableError';
+  }
+}
+
 export interface RetryOptions {
   maxRetries: number;
   baseDelayMs: number;
@@ -24,12 +31,32 @@ export async function withRetry<T>(fn: () => Promise<T>, label: string, opts?: P
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
 
+      if (lastError instanceof NonRetryableError) {
+        throw lastError;
+      }
+
+      if (options.retryableErrors && options.retryableErrors.length > 0) {
+        const msg = lastError.message.toLowerCase();
+        const isRetryable = options.retryableErrors.some((re) => msg.includes(re.toLowerCase()));
+        if (!isRetryable) {
+          throw lastError;
+        }
+      }
+
       if (attempt === options.maxRetries) break;
 
       const delay = Math.min(options.baseDelayMs * Math.pow(2, attempt), options.maxDelayMs);
       const jitter = delay * 0.1 * Math.random();
 
-      logger.warn({ attempt: attempt + 1, maxRetries: options.maxRetries, delay: Math.round(delay + jitter), error: lastError.message }, `${label}: retrying after error`);
+      logger.warn(
+        {
+          attempt: attempt + 1,
+          maxRetries: options.maxRetries,
+          delay: Math.round(delay + jitter),
+          error: lastError.message,
+        },
+        `${label}: retrying after error`,
+      );
 
       await sleep(delay + jitter);
     }
