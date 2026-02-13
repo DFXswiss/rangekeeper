@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { getLogger } from '../util/logger';
 
@@ -65,7 +65,9 @@ export class StateStore {
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
-      writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8');
+      const tmpPath = this.filePath + '.tmp';
+      writeFileSync(tmpPath, JSON.stringify(this.state, null, 2), 'utf-8');
+      renameSync(tmpPath, this.filePath);
     } catch (err) {
       this.logger.error({ err }, 'Failed to save state');
     }
@@ -76,7 +78,9 @@ export class StateStore {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8');
+    const tmpPath = this.filePath + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify(this.state, null, 2), 'utf-8');
+    renameSync(tmpPath, this.filePath);
   }
 
   getPoolState(poolId: string): PoolState | undefined {

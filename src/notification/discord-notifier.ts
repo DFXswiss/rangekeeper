@@ -6,7 +6,29 @@ import { getLogger } from '../util/logger';
 export class DiscordNotifier implements Notifier {
   private readonly logger = getLogger();
 
-  constructor(private readonly webhookUrl: string) {}
+  constructor(private readonly webhookUrl: string) {
+    this.validate();
+  }
+
+  private validate(): void {
+    if (!this.webhookUrl) {
+      throw new Error('Discord webhookUrl is required');
+    }
+    try {
+      const parsed = new URL(this.webhookUrl);
+      if (parsed.protocol !== 'https:') {
+        throw new Error('Discord webhook URL must use HTTPS');
+      }
+      if (!parsed.hostname.endsWith('discord.com')) {
+        throw new Error(`Discord webhook URL has unexpected hostname: ${parsed.hostname}`);
+      }
+    } catch (err) {
+      if (err instanceof TypeError) {
+        throw new Error(`Invalid Discord webhook URL: ${this.webhookUrl}`);
+      }
+      throw err;
+    }
+  }
 
   async notify(message: string): Promise<void> {
     if (!this.webhookUrl) return;

@@ -81,10 +81,7 @@ export function calculateBands(
   const totalTickRange = tickOffset * 2;
 
   const rawBandWidth = Math.floor(totalTickRange / bandCount);
-  const bandTickWidth = Math.max(
-    Math.floor(rawBandWidth / tickSpacing) * tickSpacing,
-    tickSpacing,
-  );
+  const bandTickWidth = Math.max(Math.floor(rawBandWidth / tickSpacing) * tickSpacing, tickSpacing);
 
   // Center band (index 3 for 7 bands) should contain centerTick
   const centerBandIndex = Math.floor(bandCount / 2);
@@ -102,8 +99,12 @@ export function calculateBands(
     bands.push({ index: i, tickLower, tickUpper });
   }
 
-  if (bands[bands.length - 1].tickLower >= bands[bands.length - 1].tickUpper) {
-    throw new Error('Band calculation produced invalid range');
+  for (const band of bands) {
+    if (band.tickLower >= band.tickUpper) {
+      throw new Error(
+        `Band ${band.index} has invalid range: tickLower ${band.tickLower} >= tickUpper ${band.tickUpper}`,
+      );
+    }
   }
 
   return {

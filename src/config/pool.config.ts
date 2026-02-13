@@ -19,9 +19,12 @@ const chainSchema = z.object({
 const poolSchema = z.object({
   token0: tokenSchema,
   token1: tokenSchema,
-  feeTier: z.number().int().refine((v) => [100, 500, 3000, 10000].includes(v), {
-    message: 'feeTier must be one of: 100, 500, 3000, 10000',
-  }),
+  feeTier: z
+    .number()
+    .int()
+    .refine((v) => [100, 500, 3000, 10000].includes(v), {
+      message: 'feeTier must be one of: 100, 500, 3000, 10000',
+    }),
   nftManagerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
   swapRouterAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
 });
@@ -85,9 +88,7 @@ function deepResolveEnvVars(obj: unknown, parentKey?: string): unknown {
     return result === UNRESOLVED ? undefined : result;
   }
   if (Array.isArray(obj)) {
-    return obj
-      .map((item) => deepResolveEnvVars(item, parentKey))
-      .filter((item) => item !== undefined);
+    return obj.map((item) => deepResolveEnvVars(item, parentKey)).filter((item) => item !== undefined);
   }
   if (obj !== null && typeof obj === 'object') {
     const result: Record<string, unknown> = {};
@@ -107,11 +108,17 @@ export function loadPoolConfigs(configPath?: string): PoolEntry[] {
 
   const result = poolsFileSchema.safeParse(resolved);
   if (!result.success) {
-    const formatted = result.error.issues
-      .map((i) => `  ${i.path.join('.')}: ${i.message}`)
-      .join('\n');
+    const formatted = result.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Pool config validation failed:\n${formatted}`);
   }
 
-  return result.data.pools;
+  const pools = result.data.pools;
+
+  const ids = pools.map((p) => p.id);
+  const duplicates = ids.filter((id, i) => ids.indexOf(id) !== i);
+  if (duplicates.length > 0) {
+    throw new Error(`Duplicate pool IDs found: ${[...new Set(duplicates)].join(', ')}`);
+  }
+
+  return pools;
 }
