@@ -66,10 +66,7 @@ async function main(): Promise<void> {
   for (const poolEntry of pools) {
     try {
       // Create failover provider with backup RPCs
-      const failoverProvider = createFailoverProvider(
-        poolEntry.chain.rpcUrl,
-        poolEntry.chain.backupRpcUrls ?? [],
-      );
+      const failoverProvider = createFailoverProvider(poolEntry.chain.rpcUrl, poolEntry.chain.backupRpcUrls ?? []);
 
       const provider = failoverProvider.getProvider();
       let wallet = getWallet(env.PRIVATE_KEY, provider);
@@ -87,7 +84,9 @@ async function main(): Promise<void> {
       );
 
       if (poolAddress === '0x0000000000000000000000000000000000000000') {
-        throw new Error(`Pool not found for ${poolEntry.pool.token0.symbol}/${poolEntry.pool.token1.symbol} fee=${poolEntry.pool.feeTier}`);
+        throw new Error(
+          `Pool not found for ${poolEntry.pool.token0.symbol}/${poolEntry.pool.token1.symbol} fee=${poolEntry.pool.feeTier}`,
+        );
       }
 
       logger.info({ poolId: poolEntry.id, poolAddress }, 'Pool resolved');
@@ -121,9 +120,9 @@ async function main(): Promise<void> {
           nonceTracker?.syncOnFailover().catch((err) => {
             logger.error({ poolId: poolEntry.id, err }, 'Failed to sync nonce on failover');
           });
-          notifier.notify(
-            `ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`,
-          ).catch(() => {});
+          notifier
+            .notify(`ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`)
+            .catch(() => {});
         };
 
         if (engine.isRebalancing()) {
@@ -171,7 +170,12 @@ async function main(): Promise<void> {
       await engine.initialize();
 
       // Wire up events
-      poolMonitor.on('priceUpdate', (state) => engine.onPriceUpdate(state));
+      poolMonitor.on('priceUpdate', (state) => {
+        failoverProvider.recordSuccess();
+        engine.onPriceUpdate(state).catch((err) => {
+          logger.error({ poolId: poolEntry.id, err }, 'Unhandled error in onPriceUpdate');
+        });
+      });
       poolMonitor.on('error', (err) => {
         logger.error({ poolId: poolEntry.id, err }, 'Pool monitor error');
         failoverProvider.recordError();

@@ -99,11 +99,7 @@ export function createRemoveResult(): RemoveResult {
   };
 }
 
-export function createPositionInfo(
-  tokenId: number,
-  tickLower: number,
-  tickUpper: number,
-): PositionInfo {
+export function createPositionInfo(tokenId: number, tickLower: number, tickUpper: number): PositionInfo {
   return {
     tokenId: BigNumber.from(tokenId),
     token0: USDT_ADDRESS,

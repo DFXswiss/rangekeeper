@@ -100,19 +100,22 @@ export class PositionManager {
     const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
       () =>
-        nftManager.mint({
-          token0: params.token0,
-          token1: params.token1,
-          fee: params.fee,
-          tickLower: params.tickLower,
-          tickUpper: params.tickUpper,
-          amount0Desired: params.amount0Desired,
-          amount1Desired: params.amount1Desired,
-          amount0Min,
-          amount1Min,
-          recipient: params.recipient,
-          deadline,
-        }, nonceOverride),
+        nftManager.mint(
+          {
+            token0: params.token0,
+            token1: params.token1,
+            fee: params.fee,
+            tickLower: params.tickLower,
+            tickUpper: params.tickUpper,
+            amount0Desired: params.amount0Desired,
+            amount1Desired: params.amount1Desired,
+            amount0Min,
+            amount1Min,
+            recipient: params.recipient,
+            deadline,
+          },
+          nonceOverride,
+        ),
       'mint',
     );
 
@@ -124,7 +127,10 @@ export class PositionManager {
 
     const event = receipt.events?.find((e: { event?: string }) => e.event === 'IncreaseLiquidity');
     if (!event?.args) {
-      this.logger.error({ txHash: receipt.transactionHash, logs: receipt.logs?.length }, 'IncreaseLiquidity event not found in mint receipt');
+      this.logger.error(
+        { txHash: receipt.transactionHash, logs: receipt.logs?.length },
+        'IncreaseLiquidity event not found in mint receipt',
+      );
       throw new Error(`Mint succeeded but IncreaseLiquidity event not found (tx: ${receipt.transactionHash})`);
     }
 
@@ -153,7 +159,10 @@ export class PositionManager {
     const w = this.wallet;
     const nftManager = this.nftManager;
 
-    this.logger.info({ tokenId: tokenId.toString(), liquidity: liquidity.toString(), slippagePercent }, 'Removing position');
+    this.logger.info(
+      { tokenId: tokenId.toString(), liquidity: liquidity.toString(), slippagePercent },
+      'Removing position',
+    );
 
     // Query expected amounts to calculate slippage-protected minimums
     const amounts = await nftManager.callStatic.decreaseLiquidity({
@@ -171,13 +180,16 @@ export class PositionManager {
     const decreaseNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const decreaseTx: ContractTransaction = await withRetry(
       () =>
-        nftManager.decreaseLiquidity({
-          tokenId,
-          liquidity,
-          amount0Min,
-          amount1Min,
-          deadline,
-        }, decreaseNonce),
+        nftManager.decreaseLiquidity(
+          {
+            tokenId,
+            liquidity,
+            amount0Min,
+            amount1Min,
+            deadline,
+          },
+          decreaseNonce,
+        ),
       'decreaseLiquidity',
     );
     const decreaseReceipt = await decreaseTx.wait();
@@ -196,12 +208,15 @@ export class PositionManager {
     const collectNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const collectTx: ContractTransaction = await withRetry(
       () =>
-        nftManager.collect({
-          tokenId,
-          recipient: w.address,
-          amount0Max: maxUint128,
-          amount1Max: maxUint128,
-        }, collectNonce),
+        nftManager.collect(
+          {
+            tokenId,
+            recipient: w.address,
+            amount0Max: maxUint128,
+            amount1Max: maxUint128,
+          },
+          collectNonce,
+        ),
       'collect',
     );
     const collectReceipt = await collectTx.wait();

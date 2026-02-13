@@ -188,12 +188,15 @@ describe('Checkpoint Recovery Integration', () => {
     await engine.initialize();
 
     // Should have cleared the stage
-    expect(mocks.updatePoolState).toHaveBeenCalledWith('USDT-ZCHF-100', expect.objectContaining({
-      rebalanceStage: undefined,
-      pendingTxHashes: undefined,
-      bands: undefined,
-      bandTickWidth: undefined,
-    }));
+    expect(mocks.updatePoolState).toHaveBeenCalledWith(
+      'USDT-ZCHF-100',
+      expect.objectContaining({
+        rebalanceStage: undefined,
+        pendingTxHashes: undefined,
+        bands: undefined,
+        bandTickWidth: undefined,
+      }),
+    );
     expect(mocks.save).toHaveBeenCalled();
 
     // Should have sent recovery notification
@@ -208,9 +211,7 @@ describe('Checkpoint Recovery Integration', () => {
   it('recovery from SWAPPED stage clears bands and sends notification', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      bands: [
-        { tokenId: '201', tickLower: -150, tickUpper: -107 },
-      ],
+      bands: [{ tokenId: '201', tickLower: -150, tickUpper: -107 }],
       bandTickWidth: 43,
       lastRebalanceTime: Date.now() - 60000,
       rebalanceStage: 'SWAPPED',
@@ -220,10 +221,13 @@ describe('Checkpoint Recovery Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    expect(mocks.updatePoolState).toHaveBeenCalledWith('USDT-ZCHF-100', expect.objectContaining({
-      rebalanceStage: undefined,
-      pendingTxHashes: undefined,
-    }));
+    expect(mocks.updatePoolState).toHaveBeenCalledWith(
+      'USDT-ZCHF-100',
+      expect.objectContaining({
+        rebalanceStage: undefined,
+        pendingTxHashes: undefined,
+      }),
+    );
     expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('SWAPPED'));
     expect(engine.getBands()).toHaveLength(0);
     expect(engine.getState()).toBe('MONITORING');
@@ -259,17 +263,15 @@ describe('Checkpoint Recovery Integration', () => {
   it('pending TX verification checks receipts on startup', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      bands: [
-        { tokenId: '201', tickLower: -150, tickUpper: -107 },
-      ],
+      bands: [{ tokenId: '201', tickLower: -150, tickUpper: -107 }],
       bandTickWidth: 43,
       pendingTxHashes: ['0xconfirmed', '0xreverted', '0xnotfound'],
     });
 
     mocks.getTransactionReceipt
-      .mockResolvedValueOnce({ status: 1 })  // confirmed
-      .mockResolvedValueOnce({ status: 0 })  // reverted
-      .mockResolvedValueOnce(null);           // not found
+      .mockResolvedValueOnce({ status: 1 }) // confirmed
+      .mockResolvedValueOnce({ status: 0 }) // reverted
+      .mockResolvedValueOnce(null); // not found
 
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
@@ -283,9 +285,7 @@ describe('Checkpoint Recovery Integration', () => {
   it('recovery allows minting new bands on next price update', async () => {
     const { ctx, mocks } = buildContext();
     mocks.getPoolState.mockReturnValue({
-      bands: [
-        { tokenId: '201', tickLower: -150, tickUpper: -107 },
-      ],
+      bands: [{ tokenId: '201', tickLower: -150, tickUpper: -107 }],
       bandTickWidth: 43,
       lastRebalanceTime: Date.now() - 60000,
       rebalanceStage: 'WITHDRAWN',

@@ -182,6 +182,13 @@ export class RebalanceEngine {
   }
 
   async onPriceUpdate(poolState: PoolState): Promise<void> {
+    // Auto-recovery: if emergency stop has cleared, transition back to monitoring
+    if ((this.state === 'ERROR' || this.state === 'STOPPED') && !this.ctx.emergencyStop.isStopped()) {
+      this.logger.info({ previousState: this.state }, 'Auto-recovered after emergency stop cooldown');
+      this.consecutiveErrors = 0;
+      this.setState('MONITORING');
+    }
+
     if (this.state === 'STOPPED' || this.state === 'ERROR') return;
     if (this.state !== 'MONITORING' && this.state !== 'IDLE') return;
     if (this.rebalanceLock) return;
