@@ -19,7 +19,12 @@ export class DryRunSwapExecutor extends SwapExecutor {
     feeTier: number,
     amountIn: BigNumber,
     _slippagePercent: number,
+    _currentTick?: number,
+    _decimalsIn?: number,
+    _decimalsOut?: number,
+    _tokenInIsToken0?: boolean,
   ): Promise<SwapResult> {
+    // Dry run: simulate swap output with fee deduction (assumes ~1:1 for simplicity)
     const amountOut = amountIn.mul(1_000_000 - feeTier).div(1_000_000);
 
     this.dryLogger.info(

@@ -120,10 +120,10 @@ export class PositionManager {
     );
 
     const receipt = await tx.wait();
+    this.nonceTracker?.confirmNonce();
     if (receipt.status === 0) {
       throw new Error('Mint transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
 
     const event = receipt.events?.find((e: { event?: string }) => e.event === 'IncreaseLiquidity');
     if (!event?.args) {
@@ -193,10 +193,10 @@ export class PositionManager {
       'decreaseLiquidity',
     );
     const decreaseReceipt = await decreaseTx.wait();
+    this.nonceTracker?.confirmNonce();
     if (decreaseReceipt.status === 0) {
       throw new Error('decreaseLiquidity transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
     const decreaseEvent = decreaseReceipt.events?.find((e: { event?: string }) => e.event === 'DecreaseLiquidity');
     if (!decreaseEvent?.args) {
       this.logger.error({ txHash: decreaseReceipt.transactionHash }, 'DecreaseLiquidity event not found');
@@ -220,10 +220,10 @@ export class PositionManager {
       'collect',
     );
     const collectReceipt = await collectTx.wait();
+    this.nonceTracker?.confirmNonce();
     if (collectReceipt.status === 0) {
       throw new Error('collect transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
     const collectEvent = collectReceipt.events?.find((e: { event?: string }) => e.event === 'Collect');
     if (!collectEvent?.args) {
       this.logger.error({ txHash: collectReceipt.transactionHash }, 'Collect event not found');
@@ -239,10 +239,10 @@ export class PositionManager {
     const burnNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const burnTx: ContractTransaction = await withRetry(() => nftManager.burn(tokenId, burnNonce), 'burn');
     const burnReceipt = await burnTx.wait();
+    this.nonceTracker?.confirmNonce();
     if (burnReceipt.status === 0) {
       throw new Error('burn transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
 
     const result: RemoveResult = {
       amount0: principalAmount0,
