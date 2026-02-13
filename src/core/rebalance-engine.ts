@@ -284,34 +284,57 @@ export class RebalanceEngine {
 
     this.rebalanceLock = true;
     this.setState('WITHDRAWING');
+    const totalBands = bands.length;
+    let removedCount = 0;
     try {
       for (const band of bands) {
-        const pos = await positionManager.getPosition(band.tokenId);
-        if (!pos.liquidity.isZero()) {
-          await positionManager.removePosition(band.tokenId, pos.liquidity, strategy.slippageTolerancePercent);
+        try {
+          const pos = await positionManager.getPosition(band.tokenId);
+          if (!pos.liquidity.isZero()) {
+            await positionManager.removePosition(band.tokenId, pos.liquidity, strategy.slippageTolerancePercent);
+          }
+          this.bandManager.removeBand(band.tokenId);
+          removedCount++;
+          this.persistState(stateStore, poolEntry.id);
+        } catch (bandErr) {
+          this.logger.error(
+            { tokenId: band.tokenId.toString(), err: bandErr },
+            'Failed to remove band during emergency withdraw, skipping',
+          );
         }
       }
 
       historyLogger.log({
         type: OperationType.EMERGENCY_STOP,
         poolId: poolEntry.id,
-        bandCount: bands.length,
+        bandCount: totalBands,
+        removedCount,
       });
 
-      await notifier.notify(
-        `EMERGENCY: All ${bands.length} bands closed for ${poolEntry.id}\n` +
-          `Reason: ${this.ctx.emergencyStop.getReason() ?? 'unknown'}\n` +
-          `Action: bot stopped, manual intervention required`,
-      );
-
-      this.bandManager.setBands([], 0);
-      this.persistState(stateStore, poolEntry.id);
+      if (removedCount < totalBands) {
+        const remaining = this.bandManager.getBandCount();
+        await notifier
+          .notify(
+            `CRITICAL: Emergency withdraw PARTIAL for ${poolEntry.id}!\n` +
+              `Removed ${removedCount}/${totalBands} bands, ${remaining} bands still on-chain\n` +
+              `Reason: ${this.ctx.emergencyStop.getReason() ?? 'unknown'}\n` +
+              `Manual intervention required immediately`,
+          )
+          .catch(() => {});
+      } else {
+        await notifier.notify(
+          `EMERGENCY: All ${totalBands} bands closed for ${poolEntry.id}\n` +
+            `Reason: ${this.ctx.emergencyStop.getReason() ?? 'unknown'}\n` +
+            `Action: bot stopped, manual intervention required`,
+        );
+      }
     } catch (err) {
       this.logger.error({ err }, 'Emergency withdraw failed');
       await notifier
         .notify(
           `CRITICAL: Emergency withdraw FAILED for ${poolEntry.id}!\n` +
             `Error: ${err instanceof Error ? err.message : String(err)}\n` +
+            `Removed ${removedCount}/${totalBands} bands before failure\n` +
             `Manual intervention required immediately`,
         )
         .catch(() => {});
@@ -545,6 +568,10 @@ export class RebalanceEngine {
           pool.feeTier,
           balance0,
           strategy.slippageTolerancePercent,
+          poolState.tick,
+          pool.token0.decimals,
+          pool.token1.decimals,
+          true,
         );
       } else if (direction === 'upper' && balance1.gt(0)) {
         swapResult = await swapExecutor.executeSwap(
@@ -553,6 +580,10 @@ export class RebalanceEngine {
           pool.feeTier,
           balance1,
           strategy.slippageTolerancePercent,
+          poolState.tick,
+          pool.token1.decimals,
+          pool.token0.decimals,
+          false,
         );
       }
 

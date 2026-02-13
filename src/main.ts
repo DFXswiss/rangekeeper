@@ -24,6 +24,7 @@ import { NonceTracker } from './chain/nonce-tracker';
 import { startHealthServer, setDryRunMode } from './health/health-server';
 
 const engines: RebalanceEngine[] = [];
+let stateStoreRef: StateStore | undefined;
 
 async function main(): Promise<void> {
   const env = loadEnvConfig();
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
   // Persistence
   const dataDir = path.resolve(process.cwd(), 'data');
   const stateStore = new StateStore(path.join(dataDir, 'state.json'));
+  stateStoreRef = stateStore;
   const historyLogger = new HistoryLogger(path.join(dataDir, 'history.jsonl'));
 
   // Load pool configs
@@ -190,7 +192,9 @@ async function main(): Promise<void> {
     }
   }
 
-  await notifier.notify(`RangeKeeper started with ${engines.length} pool(s)`);
+  await notifier.notify(`RangeKeeper started with ${engines.length} pool(s)`).catch((err) => {
+    logger.warn({ err }, 'Failed to send startup notification');
+  });
 
   logger.info({ activeEngines: engines.length }, 'RangeKeeper is running');
 }
@@ -206,7 +210,8 @@ function setupShutdownHandlers(): void {
       await engine.stop();
     }
 
-    logger.info('All engines stopped, exiting');
+    stateStoreRef?.save();
+    logger.info('All engines stopped, state persisted, exiting');
     process.exit(0);
   };
 

@@ -47,6 +47,10 @@ export class SwapExecutor {
     feeTier: number,
     amountIn: BigNumber,
     slippagePercent: number,
+    currentTick?: number,
+    decimalsIn?: number,
+    decimalsOut?: number,
+    tokenInIsToken0?: boolean,
   ): Promise<SwapResult> {
     const w = this.wallet;
     const router = this.router;
@@ -62,9 +66,15 @@ export class SwapExecutor {
       );
     }
 
-    // For stablecoin pairs, we expect ~1:1 ratio, so min out is based on slippage
     const slippageMul = Math.floor((1 - slippagePercent / 100) * 10000);
-    const amountOutMinimum = amountIn.mul(slippageMul).div(10000);
+    const amountOutMinimum = this.computeAmountOutMinimum(
+      amountIn,
+      slippageMul,
+      currentTick,
+      decimalsIn,
+      decimalsOut,
+      tokenInIsToken0,
+    );
 
     const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
@@ -85,10 +95,10 @@ export class SwapExecutor {
     );
 
     const receipt = await tx.wait();
+    this.nonceTracker?.confirmNonce();
     if (receipt.status === 0) {
       throw new Error('Swap transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
 
     // Parse Transfer event from output token to get amountOut
     const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -116,5 +126,72 @@ export class SwapExecutor {
     );
 
     return { amountOut, txHash: receipt.transactionHash };
+  }
+
+  protected computeAmountOutMinimum(
+    amountIn: BigNumber,
+    slippageMul: number,
+    currentTick?: number,
+    decimalsIn?: number,
+    decimalsOut?: number,
+    tokenInIsToken0?: boolean,
+  ): BigNumber {
+    // If price info is provided, compute price-aware minimum
+    if (
+      currentTick !== undefined &&
+      decimalsIn !== undefined &&
+      decimalsOut !== undefined &&
+      tokenInIsToken0 !== undefined
+    ) {
+      try {
+        const price = Math.pow(1.0001, currentTick);
+        if (!Number.isFinite(price) || price <= 0) {
+          throw new Error(`Invalid price from tick ${currentTick}`);
+        }
+
+        // Use scaled integer arithmetic: price scaled by 10^15
+        const PRICE_PRECISION = 1e15;
+        const priceScaled = Math.round(price * PRICE_PRECISION);
+        if (!Number.isFinite(priceScaled) || priceScaled <= 0) {
+          throw new Error(`Price scaling overflow for tick ${currentTick}`);
+        }
+        const priceBN = BigNumber.from(Math.floor(priceScaled).toString());
+        const precisionBN = BigNumber.from(Math.floor(PRICE_PRECISION).toString());
+
+        const absDiff = Math.abs(decimalsOut - decimalsIn);
+        const decimalAdjust = absDiff > 0 ? BigNumber.from(10).pow(absDiff) : BigNumber.from(1);
+
+        let expectedOut: BigNumber;
+        if (tokenInIsToken0) {
+          // token0→token1: expectedOut = amountIn * price * 10^(decOut-decIn)
+          if (decimalsOut >= decimalsIn) {
+            expectedOut = amountIn.mul(priceBN).mul(decimalAdjust).div(precisionBN);
+          } else {
+            expectedOut = amountIn.mul(priceBN).div(precisionBN).div(decimalAdjust);
+          }
+        } else {
+          // token1→token0: expectedOut = amountIn / price * 10^(decOut-decIn)
+          if (decimalsOut >= decimalsIn) {
+            expectedOut = amountIn.mul(precisionBN).mul(decimalAdjust).div(priceBN);
+          } else {
+            expectedOut = amountIn.mul(precisionBN).div(priceBN).div(decimalAdjust);
+          }
+        }
+
+        const result = expectedOut.mul(slippageMul).div(10000);
+        if (result.gt(0)) {
+          this.logger.debug(
+            { expectedOut: expectedOut.toString(), amountOutMinimum: result.toString(), currentTick },
+            'Price-aware amountOutMinimum computed',
+          );
+          return result;
+        }
+      } catch (err) {
+        this.logger.warn({ err, currentTick }, 'Failed to compute price-aware amountOutMinimum, using 1:1 fallback');
+      }
+    }
+
+    // Fallback: assume 1:1 ratio (safe for same-decimal stablecoin pairs)
+    return amountIn.mul(slippageMul).div(10000);
   }
 }
