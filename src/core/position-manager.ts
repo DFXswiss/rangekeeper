@@ -72,10 +72,16 @@ export class PositionManager {
     const token0 = getErc20Contract(token0Address, w);
     const token1 = getErc20Contract(token1Address, w);
 
-    await Promise.all([
-      ensureApproval(token0, this.nftManagerAddress, w.address, constants.MaxUint256),
-      ensureApproval(token1, this.nftManagerAddress, w.address, constants.MaxUint256),
-    ]);
+    // Run approvals sequentially when using NonceTracker to avoid nonce conflicts
+    if (this.nonceTracker) {
+      await ensureApproval(token0, this.nftManagerAddress, w.address, constants.MaxUint256, this.nonceTracker);
+      await ensureApproval(token1, this.nftManagerAddress, w.address, constants.MaxUint256, this.nonceTracker);
+    } else {
+      await Promise.all([
+        ensureApproval(token0, this.nftManagerAddress, w.address, constants.MaxUint256),
+        ensureApproval(token1, this.nftManagerAddress, w.address, constants.MaxUint256),
+      ]);
+    }
 
     this.logger.info('Token approvals confirmed for NFT Manager');
   }
@@ -204,25 +210,36 @@ export class PositionManager {
     }
 
     // Step 2: Collect all tokens (including fees)
+    // Use higher retry count since tokens are stuck in NFT manager if collect fails after decreaseLiquidity
     const maxUint128 = BigNumber.from(2).pow(128).sub(1);
     const collectNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
-    const collectTx: ContractTransaction = await withRetry(
-      () =>
-        nftManager.collect(
-          {
-            tokenId,
-            recipient: w.address,
-            amount0Max: maxUint128,
-            amount1Max: maxUint128,
-          },
-          collectNonce,
-        ),
-      'collect',
-    );
-    const collectReceipt = await collectTx.wait();
-    this.nonceTracker?.confirmNonce();
-    if (collectReceipt.status === 0) {
-      throw new Error('collect transaction reverted on-chain');
+    let collectReceipt;
+    try {
+      const collectTx: ContractTransaction = await withRetry(
+        () =>
+          nftManager.collect(
+            {
+              tokenId,
+              recipient: w.address,
+              amount0Max: maxUint128,
+              amount1Max: maxUint128,
+            },
+            collectNonce,
+          ),
+        'collect',
+        { maxRetries: 5, baseDelayMs: 2000, maxDelayMs: 30000 },
+      );
+      collectReceipt = await collectTx.wait();
+      this.nonceTracker?.confirmNonce();
+      if (collectReceipt.status === 0) {
+        throw new Error('collect transaction reverted on-chain');
+      }
+    } catch (collectErr) {
+      this.logger.error(
+        { tokenId: tokenId.toString(), err: collectErr },
+        'CRITICAL: collect failed after decreaseLiquidity — tokens may be stuck in NFT manager. Manual collect required.',
+      );
+      throw collectErr;
     }
     const collectEvent = collectReceipt.events?.find((e: { event?: string }) => e.event === 'Collect');
     if (!collectEvent?.args) {

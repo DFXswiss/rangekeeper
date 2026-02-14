@@ -164,12 +164,11 @@ export class RebalanceEngine {
             tickUpper: p.tickUpper,
           }));
         if (activeBands.length > 0) {
-          const bandWidth =
-            activeBands.length > 1
-              ? activeBands[1].tickLower - activeBands[0].tickLower
-              : activeBands[0].tickUpper - activeBands[0].tickLower;
+          // Use individual band width (tickUpper - tickLower) instead of inter-band distance,
+          // which would be wrong if bands are non-contiguous after partial emergency withdraw
+          const bandWidth = activeBands[0].tickUpper - activeBands[0].tickLower;
           this.bandManager.setBands(activeBands, bandWidth);
-          this.logger.info({ bandCount: activeBands.length }, 'Found existing on-chain positions as bands');
+          this.logger.info({ bandCount: activeBands.length, bandWidth }, 'Found existing on-chain positions as bands');
         }
       }
     }
@@ -542,6 +541,7 @@ export class RebalanceEngine {
       );
 
       // STEP 2: Swap through own pool (6 remaining bands provide liquidity)
+      // Only swap the tokens received from the dissolved band, not the entire wallet balance
       this.setState('SWAPPING');
       const token0Contract = getErc20Contract(pool.token0.address, wallet);
       const token1Contract = getErc20Contract(pool.token1.address, wallet);
@@ -550,7 +550,7 @@ export class RebalanceEngine {
         token1Contract.balanceOf(wallet.address),
       ]);
 
-      // Pre-swap value: dissolved band tokens + wallet dust (meaningful baseline for loss check)
+      // Pre-swap value: wallet balance (meaningful baseline for loss check)
       const preSwapPrice = tickToPrice(poolState.tick);
       const preSwapValue = this.estimatePortfolioValue(
         balance0,
@@ -560,27 +560,35 @@ export class RebalanceEngine {
         preSwapPrice,
       );
 
+      // Determine swap amount from dissolved band (principal + fees)
+      const dissolvedAmount0 = removeResult ? removeResult.amount0.add(removeResult.fee0) : BigNumber.from(0);
+      const dissolvedAmount1 = removeResult ? removeResult.amount1.add(removeResult.fee1) : BigNumber.from(0);
+
       let swapResult: SwapResult | undefined;
       // When price goes lower: dissolved top band yields token0, we need token1 for new bottom band
       // When price goes upper: dissolved bottom band yields token1, we need token0 for new top band
-      if (direction === 'lower' && balance0.gt(0)) {
+      if (direction === 'lower' && dissolvedAmount0.gt(0)) {
+        // Cap at wallet balance in case of rounding
+        const swapAmount = dissolvedAmount0.gt(balance0) ? balance0 : dissolvedAmount0;
         swapResult = await swapExecutor.executeSwap(
           pool.token0.address,
           pool.token1.address,
           pool.feeTier,
-          balance0,
+          swapAmount,
           strategy.slippageTolerancePercent,
           poolState.tick,
           pool.token0.decimals,
           pool.token1.decimals,
           true,
         );
-      } else if (direction === 'upper' && balance1.gt(0)) {
+      } else if (direction === 'upper' && dissolvedAmount1.gt(0)) {
+        // Cap at wallet balance in case of rounding
+        const swapAmount = dissolvedAmount1.gt(balance1) ? balance1 : dissolvedAmount1;
         swapResult = await swapExecutor.executeSwap(
           pool.token1.address,
           pool.token0.address,
           pool.feeTier,
-          balance1,
+          swapAmount,
           strategy.slippageTolerancePercent,
           poolState.tick,
           pool.token1.decimals,

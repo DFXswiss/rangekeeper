@@ -113,7 +113,10 @@ async function main(): Promise<void> {
       // Register failover callback to rebuild contracts with new provider
       // Defers if a rebalance is in progress to avoid mixed-provider state
       failoverProvider.setFailoverCallback((fromUrl, toUrl, newProvider) => {
+        let failoverApplied = false;
         const applyFailover = () => {
+          if (failoverApplied) return;
+          failoverApplied = true;
           logger.warn({ poolId: poolEntry.id, from: fromUrl, to: toUrl }, 'RPC failover: reconnecting contracts');
           wallet = getWallet(env.PRIVATE_KEY, newProvider);
           poolContract = getPoolContract(poolAddress, wallet);
@@ -130,7 +133,7 @@ async function main(): Promise<void> {
         if (engine.isRebalancing()) {
           logger.warn({ poolId: poolEntry.id }, 'RPC failover deferred: rebalance in progress');
           const deferInterval = setInterval(() => {
-            if (!engine.isRebalancing()) {
+            if (!engine.isRebalancing() && !failoverApplied) {
               clearInterval(deferInterval);
               applyFailover();
             }
@@ -138,10 +141,12 @@ async function main(): Promise<void> {
           // Safety: don't defer forever (30s max)
           setTimeout(() => {
             clearInterval(deferInterval);
-            if (engine.isRebalancing()) {
-              logger.error({ poolId: poolEntry.id }, 'RPC failover forced after 30s defer timeout');
+            if (!failoverApplied) {
+              if (engine.isRebalancing()) {
+                logger.error({ poolId: poolEntry.id }, 'RPC failover forced after 30s defer timeout');
+              }
+              applyFailover();
             }
-            applyFailover();
           }, 30_000);
         } else {
           applyFailover();

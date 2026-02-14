@@ -33,10 +33,16 @@ export class SwapExecutor {
     const token0 = getErc20Contract(token0Address, w);
     const token1 = getErc20Contract(token1Address, w);
 
-    await Promise.all([
-      ensureApproval(token0, this.swapRouterAddress, w.address, constants.MaxUint256),
-      ensureApproval(token1, this.swapRouterAddress, w.address, constants.MaxUint256),
-    ]);
+    // Run approvals sequentially when using NonceTracker to avoid nonce conflicts
+    if (this.nonceTracker) {
+      await ensureApproval(token0, this.swapRouterAddress, w.address, constants.MaxUint256, this.nonceTracker);
+      await ensureApproval(token1, this.swapRouterAddress, w.address, constants.MaxUint256, this.nonceTracker);
+    } else {
+      await Promise.all([
+        ensureApproval(token0, this.swapRouterAddress, w.address, constants.MaxUint256),
+        ensureApproval(token1, this.swapRouterAddress, w.address, constants.MaxUint256),
+      ]);
+    }
 
     this.logger.info('Token approvals confirmed for Swap Router');
   }
