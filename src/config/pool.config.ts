@@ -120,5 +120,15 @@ export function loadPoolConfigs(configPath?: string): PoolEntry[] {
     throw new Error(`Duplicate pool IDs found: ${[...new Set(duplicates)].join(', ')}`);
   }
 
+  for (const p of pools) {
+    if (p.pool.token0.address.toLowerCase() >= p.pool.token1.address.toLowerCase()) {
+      throw new Error(
+        `Pool "${p.id}": token0 address must be less than token1 address (Uniswap V3 requirement). ` +
+          `Got token0=${p.pool.token0.address} (${p.pool.token0.symbol}), token1=${p.pool.token1.address} (${p.pool.token1.symbol}). ` +
+          `Swap them in pools.yaml.`,
+      );
+    }
+  }
+
   return pools;
 }

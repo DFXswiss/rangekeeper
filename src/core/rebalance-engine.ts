@@ -1,4 +1,4 @@
-import { BigNumber, providers } from 'ethers';
+import { BigNumber, providers, utils } from 'ethers';
 import { getLogger } from '../util/logger';
 import { PoolMonitor, PoolState, PositionRange } from './pool-monitor';
 import { PositionManager, RemoveResult } from './position-manager';
@@ -31,7 +31,6 @@ export type RebalanceState =
   | 'STOPPED';
 
 const REBALANCE_GAS_ESTIMATE = 800_000;
-const ETH_PRICE_USD_FALLBACK = 3000;
 
 export interface RebalanceContext {
   poolEntry: PoolEntry;
@@ -363,8 +362,12 @@ export class RebalanceEngine {
         this.logger.warn('Gas spike but position is out of range, proceeding anyway');
       }
 
-      const ethPrice = this.ctx.ethPriceUsd ?? ETH_PRICE_USD_FALLBACK;
-      const estimatedCostUsd = estimateGasCostUsd(REBALANCE_GAS_ESTIMATE, gasInfo.gasPriceGwei, ethPrice);
+      if (!this.ctx.ethPriceUsd) {
+        this.logger.warn('No ETH price available, skipping USD gas cost check');
+        return true;
+      }
+
+      const estimatedCostUsd = estimateGasCostUsd(REBALANCE_GAS_ESTIMATE, gasInfo.gasPriceGwei, this.ctx.ethPriceUsd);
 
       if (estimatedCostUsd > strategy.maxGasCostUsd && !isOutOfRange) {
         this.logger.info(
@@ -448,8 +451,8 @@ export class RebalanceEngine {
 
       // Set IL tracker entry and initial portfolio value
       const currentPrice = tickToPrice(poolState.tick);
-      const bal0 = parseFloat(totalBalance0.toString()) / Math.pow(10, pool.token0.decimals);
-      const bal1 = parseFloat(totalBalance1.toString()) / Math.pow(10, pool.token1.decimals);
+      const bal0 = parseFloat(utils.formatUnits(totalBalance0, pool.token0.decimals));
+      const bal1 = parseFloat(utils.formatUnits(totalBalance1, pool.token1.decimals));
       ilTracker.setEntry(bal0, bal1, currentPrice);
 
       const initialValue = this.estimatePortfolioValue(
@@ -762,8 +765,8 @@ export class RebalanceEngine {
       this.logger.error({ price }, 'Invalid price for portfolio estimation, returning 0');
       return 0;
     }
-    const bal0 = parseFloat(balance0.toString()) / Math.pow(10, decimals0);
-    const bal1 = parseFloat(balance1.toString()) / Math.pow(10, decimals1);
+    const bal0 = parseFloat(utils.formatUnits(balance0, decimals0));
+    const bal1 = parseFloat(utils.formatUnits(balance1, decimals1));
     const value = bal0 * price + bal1;
     if (!Number.isFinite(value)) {
       this.logger.error({ bal0, bal1, price, value }, 'Portfolio value calculation produced non-finite result');
