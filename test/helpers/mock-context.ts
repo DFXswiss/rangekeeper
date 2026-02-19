@@ -121,7 +121,7 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
   const removePosition = jest.fn().mockResolvedValue({
     amount0: AMOUNT_100_USDT,
     amount1: AMOUNT_100_ZCHF,
-    fee0: BigNumber.from(1_000_000),
+    fee0: BigNumber.from('1000000000000000000'),
     fee1: BigNumber.from('1000000000000000000'),
     txHashes: {
       decreaseLiquidity: '0xmock-decrease-hash',
@@ -268,5 +268,5 @@ export function createMockContext(poolEntryOverrides?: Partial<PoolEntry>): Mock
 }
 
 function AMOUNT_50_USDT(): BigNumber {
-  return BigNumber.from(50_000_000);
+  return BigNumber.from('50000000000000000000');
 }

@@ -5,6 +5,10 @@ export function tickToPrice(tick: number): number {
   return Math.pow(1.0001, tick);
 }
 
+export function tickToAdjustedPrice(tick: number, decimals0: number, decimals1: number): number {
+  return Math.pow(1.0001, tick) * Math.pow(10, decimals0 - decimals1);
+}
+
 export function priceToTick(price: number): number {
   return Math.floor(Math.log(price) / Math.log(1.0001));
 }
