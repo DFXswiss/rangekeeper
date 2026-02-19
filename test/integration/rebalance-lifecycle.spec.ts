@@ -209,6 +209,25 @@ describe('Rebalance Lifecycle Integration', () => {
 
   it('initialize() finds on-chain positions and sets bands from chain', async () => {
     const { ctx, mocks } = buildContext();
+    mocks.findExistingPositions.mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({
+        tokenId: BigNumber.from(789 + i),
+        tickLower: -100 + i * 40,
+        tickUpper: -60 + i * 40,
+        liquidity: BigNumber.from('5000000'),
+      })),
+    );
+
+    const engine = new RebalanceEngine(ctx);
+    await engine.initialize();
+
+    expect(engine.getState()).toBe('MONITORING');
+    expect(engine.getBands()).toHaveLength(5);
+    expect(engine.getBands()[0].tokenId.eq(789)).toBe(true);
+  });
+
+  it('initialize() stops engine when on-chain positions are below minimum band count', async () => {
+    const { ctx, mocks } = buildContext();
     mocks.findExistingPositions.mockResolvedValue([
       {
         tokenId: BigNumber.from(789),
@@ -221,9 +240,8 @@ describe('Rebalance Lifecycle Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    expect(engine.getState()).toBe('MONITORING');
-    expect(engine.getBands()).toHaveLength(1);
-    expect(engine.getBands()[0].tokenId.eq(789)).toBe(true);
+    expect(engine.getState()).toBe('STOPPED');
+    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('CRITICAL'));
   });
 
   it('onPriceUpdate with no bands mints initial 7 bands', async () => {
