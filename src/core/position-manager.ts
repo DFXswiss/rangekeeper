@@ -87,9 +87,6 @@ export class PositionManager {
   }
 
   async mint(params: MintParams): Promise<MintResult> {
-    const slippageMul = 1 - params.slippagePercent / 100;
-    const amount0Min = params.amount0Desired.mul(Math.floor(slippageMul * 10000)).div(10000);
-    const amount1Min = params.amount1Desired.mul(Math.floor(slippageMul * 10000)).div(10000);
     const deadline = Math.floor(Date.now() / 1000) + 300; // 5 min
 
     this.logger.info(
@@ -103,6 +100,27 @@ export class PositionManager {
     );
 
     const nftManager = this.nftManager;
+
+    // Simulate mint to get actual expected amounts (handles out-of-range bands correctly)
+    const simulated = await nftManager.callStatic.mint({
+      token0: params.token0,
+      token1: params.token1,
+      fee: params.fee,
+      tickLower: params.tickLower,
+      tickUpper: params.tickUpper,
+      amount0Desired: params.amount0Desired,
+      amount1Desired: params.amount1Desired,
+      amount0Min: 0,
+      amount1Min: 0,
+      recipient: params.recipient,
+      deadline,
+    });
+
+    // Apply slippage to simulated amounts (not desired amounts)
+    const slippageMul = Math.floor((1 - params.slippagePercent / 100) * 10000);
+    const amount0Min = BigNumber.from(simulated.amount0).mul(slippageMul).div(10000);
+    const amount1Min = BigNumber.from(simulated.amount1).mul(slippageMul).div(10000);
+
     const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
       () =>

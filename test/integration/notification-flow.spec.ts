@@ -33,7 +33,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     id: 'USDT-ZCHF-100',
     chain: { name: 'ethereum', chainId: 1, rpcUrl: 'http://localhost:8545', backupRpcUrls: [] },
     pool: {
-      token0: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 6 },
+      token0: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 18 },
       token1: { address: '0xB58E61C3098d85632Df34EecfB899A1Ed80921cB', symbol: 'ZCHF', decimals: 18 },
       feeTier: 100,
       nftManagerAddress: '0xNFT',
@@ -77,7 +77,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
-      fee0: BigNumber.from(1_000_000),
+      fee0: BigNumber.from('1000000000000000000'),
       fee1: BigNumber.from('1000000000000000000'),
       txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' },
     }),

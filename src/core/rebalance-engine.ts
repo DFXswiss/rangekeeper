@@ -16,7 +16,7 @@ import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
 import { NonceTracker } from '../chain/nonce-tracker';
-import { tickToPrice } from '../util/tick-math';
+import { tickToAdjustedPrice } from '../util/tick-math';
 import { Wallet } from 'ethers';
 import { BandManager, Band, TriggerDirection } from './band-manager';
 
@@ -234,7 +234,8 @@ export class RebalanceEngine {
 
     if (!strategy.expectedPriceRatio) return false;
 
-    const currentPrice = tickToPrice(poolState.tick);
+    const { pool } = poolEntry;
+    const currentPrice = tickToAdjustedPrice(poolState.tick, pool.token0.decimals, pool.token1.decimals);
     const deviation = (Math.abs(currentPrice - strategy.expectedPriceRatio) / strategy.expectedPriceRatio) * 100;
     const threshold = strategy.depegThresholdPercent ?? 5;
 
@@ -450,7 +451,7 @@ export class RebalanceEngine {
       this.consecutiveErrors = 0;
 
       // Set IL tracker entry and initial portfolio value
-      const currentPrice = tickToPrice(poolState.tick);
+      const currentPrice = tickToAdjustedPrice(poolState.tick, pool.token0.decimals, pool.token1.decimals);
       const bal0 = parseFloat(utils.formatUnits(totalBalance0, pool.token0.decimals));
       const bal1 = parseFloat(utils.formatUnits(totalBalance1, pool.token1.decimals));
       ilTracker.setEntry(bal0, bal1, currentPrice);
@@ -554,7 +555,7 @@ export class RebalanceEngine {
       ]);
 
       // Pre-swap value: wallet balance (meaningful baseline for loss check)
-      const preSwapPrice = tickToPrice(poolState.tick);
+      const preSwapPrice = tickToAdjustedPrice(poolState.tick, pool.token0.decimals, pool.token1.decimals);
       const preSwapValue = this.estimatePortfolioValue(
         balance0,
         balance1,
@@ -633,7 +634,7 @@ export class RebalanceEngine {
       this.consecutiveErrors = 0;
 
       // Post-swap value check: compare value before swap (dissolved band) with value after swap
-      const postSwapPrice = tickToPrice(poolState.tick);
+      const postSwapPrice = tickToAdjustedPrice(poolState.tick, pool.token0.decimals, pool.token1.decimals);
       const postSwapValue = this.estimatePortfolioValue(
         newBal0,
         newBal1,
