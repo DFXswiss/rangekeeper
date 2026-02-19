@@ -31,6 +31,7 @@ export type RebalanceState =
   | 'STOPPED';
 
 const REBALANCE_GAS_ESTIMATE = 800_000;
+const MIN_OPERATIONAL_BANDS = 5;
 
 export interface RebalanceContext {
   poolEntry: PoolEntry;
@@ -210,6 +211,22 @@ export class RebalanceEngine {
           this.logger.info({ bandCount: activeBands.length, bandWidth }, 'Found existing on-chain positions as bands');
         }
       }
+    }
+
+    // Guard: band count too low for correct trigger logic (safe zone overlaps trigger zone)
+    const loadedBandCount = this.bandManager.getBandCount();
+    if (loadedBandCount > 0 && loadedBandCount < MIN_OPERATIONAL_BANDS) {
+      this.logger.error(
+        { bandCount: loadedBandCount, minRequired: MIN_OPERATIONAL_BANDS },
+        'Band count below minimum for safe trigger logic — manual intervention required',
+      );
+      await notifier.notify(
+        `CRITICAL: Only ${loadedBandCount} bands remaining (minimum ${MIN_OPERATIONAL_BANDS} needed). ` +
+          'Engine stopped to prevent silent inactivity. Manual intervention required.',
+      );
+      this.ctx.emergencyStop.trigger(`Band count ${loadedBandCount} below minimum ${MIN_OPERATIONAL_BANDS}`, 'manual');
+      this.setState('STOPPED');
+      return;
     }
 
     // Ensure token approvals for both NFT manager and swap router
