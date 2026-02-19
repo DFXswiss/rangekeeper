@@ -89,7 +89,7 @@ export class RebalanceEngine {
 
     const savedState = stateStore.getPoolState(poolEntry.id);
 
-    // Load band state from persistence
+    // Load band state from persistence and validate against on-chain
     if (savedState?.bands?.length) {
       const bands: Band[] = savedState.bands.map((b, i) => ({
         index: i,
@@ -97,9 +97,49 @@ export class RebalanceEngine {
         tickLower: b.tickLower,
         tickUpper: b.tickUpper,
       }));
-      this.bandManager.setBands(bands, savedState.bandTickWidth ?? 0);
+
+      // Validate each band exists on-chain (protects against crash during emergency withdraw)
+      const validBands: Band[] = [];
+      let validationAborted = false;
+      for (const band of bands) {
+        try {
+          const pos = await positionManager.getPosition(band.tokenId);
+          if (!pos.liquidity.isZero()) {
+            validBands.push(band);
+          } else {
+            this.logger.warn({ tokenId: band.tokenId.toString() }, 'Dropping band with zero liquidity from state');
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message.toLowerCase() : '';
+          if (msg.includes('invalid token id') || msg.includes('nonexistent token')) {
+            this.logger.warn({ tokenId: band.tokenId.toString() }, 'Dropping orphaned band not found on-chain');
+          } else {
+            // RPC or transient error — abort validation to prevent data loss
+            this.logger.error({ err }, 'Band validation failed due to RPC error, keeping all bands from state');
+            validationAborted = true;
+            break;
+          }
+        }
+      }
+
+      if (validationAborted) {
+        this.bandManager.setBands(bands, savedState.bandTickWidth ?? 0);
+        this.logger.info({ bandCount: bands.length }, 'Restored band state from disk (validation skipped)');
+      } else {
+        if (validBands.length !== bands.length) {
+          this.logger.warn(
+            { loaded: bands.length, valid: validBands.length },
+            'Removed stale bands during on-chain validation',
+          );
+          validBands.forEach((b, i) => (b.index = i));
+        }
+        if (validBands.length > 0) {
+          this.bandManager.setBands(validBands, savedState.bandTickWidth ?? 0);
+          this.persistState(stateStore, poolEntry.id);
+        }
+        this.logger.info({ bandCount: validBands.length }, 'Restored band state from disk');
+      }
       this.lastRebalanceTime = savedState.lastRebalanceTime ?? 0;
-      this.logger.info({ bandCount: bands.length }, 'Restored band state from disk');
     }
 
     // Verify pending TXs from previous run
