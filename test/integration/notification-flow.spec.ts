@@ -77,7 +77,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
-      fee0: BigNumber.from(1_000_000),
+      fee0: BigNumber.from('1000000000000000000'),
       fee1: BigNumber.from('1000000000000000000'),
       txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' },
     }),

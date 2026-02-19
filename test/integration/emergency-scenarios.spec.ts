@@ -82,7 +82,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     }),
     findExistingPositions: jest.fn().mockResolvedValue([]),
     approveTokensSE: jest.fn().mockResolvedValue(undefined),
-    executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(50_000_000), txHash: '0xmock-swap-hash' }),
+    executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from('50000000000000000000'), txHash: '0xmock-swap-hash' }),
     setInitialValue: jest.fn(),
     getInitialValue: jest.fn().mockReturnValue(undefined),
     getLossPercent: jest.fn(),
