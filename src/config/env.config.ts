@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ path: '/app/data/.env' }); // Azure File Share
+dotenv.config(); // Fallback: .env in project root (local dev)
 
 const envSchema = z.object({
   PRIVATE_KEY: z.string().startsWith('0x').min(66),
