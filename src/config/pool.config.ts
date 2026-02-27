@@ -1,10 +1,14 @@
 import { readFileSync } from 'fs';
 import { parse } from 'yaml';
 import { z } from 'zod';
+import { ethers } from 'ethers';
 import path from 'path';
 
 const tokenSchema = z.object({
-  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  address: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr)),
   symbol: z.string().min(1),
   decimals: z.number().int().min(0).max(18),
 });
@@ -25,8 +29,14 @@ const poolSchema = z.object({
     .refine((v) => [100, 500, 3000, 10000].includes(v), {
       message: 'feeTier must be one of: 100, 500, 3000, 10000',
     }),
-  nftManagerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-  swapRouterAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  nftManagerAddress: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr)),
+  swapRouterAddress: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr)),
 });
 
 const strategySchema = z.object({
