@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 env:
+  DEPLOYMENT_ENABLED: false
   DOCKER_TAGS: dfxswiss/rangekeeper:beta
   AZURE_RESOURCE_GROUP: rg-dfx-api-dev
   AZURE_STORAGE_ACCOUNT_NAME: stdfxapidev
@@ -46,6 +47,7 @@ jobs:
           creds: ${{ secrets.DFX_DEV_CREDENTIALS }}
 
       - name: Get Storage Key
+        if: env.DEPLOYMENT_ENABLED == 'true'
         run: |
           STORAGE_KEY=$(az storage account keys list \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
@@ -54,6 +56,7 @@ jobs:
           echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
 
       - name: Get Log Analytics Info
+        if: env.DEPLOYMENT_ENABLED == 'true'
         run: |
           LOG_WORKSPACE_ID=$(az monitor log-analytics workspace show \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
@@ -68,6 +71,7 @@ jobs:
           echo "LOG_WORKSPACE_KEY=$LOG_WORKSPACE_KEY" >> $GITHUB_ENV
 
       - name: Render deployment YAML
+        if: env.DEPLOYMENT_ENABLED == 'true'
         uses: nowactions/envsubst@v1
         with:
           input: ./aci-dev.yaml
@@ -87,16 +91,24 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.RK_DEV_DISCORD_WEBHOOK_URL }}
 
       - name: Stop Azure Container Instance
+        if: env.DEPLOYMENT_ENABLED == 'true'
         run: |
           az container stop --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --name ${{ env.CONTAINER_NAME }} || true
 
       - name: Delete Azure Container Instance
+        if: env.DEPLOYMENT_ENABLED == 'true'
         run: |
           az container delete --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --name ${{ env.CONTAINER_NAME }} --yes || true
 
       - name: Deploy container instance
+        if: env.DEPLOYMENT_ENABLED == 'true'
         run: |
           az container create --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --file ./rendered-aci-dev.yaml
+
+      - name: Stop container (disabled)
+        if: env.DEPLOYMENT_ENABLED != 'true'
+        run: |
+          az container stop --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --name ${{ env.CONTAINER_NAME }} || true
 
       - name: Logout from Azure
         run: |
