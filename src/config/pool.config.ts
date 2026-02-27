@@ -8,7 +8,7 @@ const tokenSchema = z.object({
   address: z
     .string()
     .regex(/^0x[a-fA-F0-9]{40}$/)
-    .transform((addr) => ethers.utils.getAddress(addr)),
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase())),
   symbol: z.string().min(1),
   decimals: z.number().int().min(0).max(18),
 });
@@ -32,11 +32,11 @@ const poolSchema = z.object({
   nftManagerAddress: z
     .string()
     .regex(/^0x[a-fA-F0-9]{40}$/)
-    .transform((addr) => ethers.utils.getAddress(addr)),
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase())),
   swapRouterAddress: z
     .string()
     .regex(/^0x[a-fA-F0-9]{40}$/)
-    .transform((addr) => ethers.utils.getAddress(addr)),
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase())),
 });
 
 const strategySchema = z.object({
