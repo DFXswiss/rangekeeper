@@ -1,33 +1,4 @@
 pools:
-  - id: 'usdt-zchf-ethereum'
-    chain:
-      name: 'ethereum'
-      chainId: 1
-      rpcUrl: '${ETHEREUM_RPC_URL}'
-      backupRpcUrls: []
-    pool:
-      token0:
-        address: '0xb58e61C3098d85632Df34EecfB899A1Ed80921cB'
-        symbol: 'ZCHF'
-        decimals: 18
-      token1:
-        address: '0xdAC17F958D2ee523a2206206994597C13D831ec7'
-        symbol: 'USDT'
-        decimals: 6
-      feeTier: 100
-      nftManagerAddress: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88'
-      swapRouterAddress: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45'
-    strategy:
-      rangeWidthPercent: 3.0
-      rebalanceThresholdPercent: 80
-      minRebalanceIntervalMinutes: 30
-      maxGasCostUsd: 5.0
-      slippageTolerancePercent: 0.5
-      expectedPriceRatio: 1.27 # ZCHF/USDT price (CHF is stronger than USD)
-      depegThresholdPercent: 10.0 # CHF/USD fluctuates, needs wider threshold
-    monitoring:
-      checkIntervalSeconds: 30
-
   - id: 'svjusd-wcbtc-citrea'
     chain:
       name: 'citrea'
