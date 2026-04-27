@@ -84,6 +84,41 @@ export function importPriceHistory(poolId: string, data: { time: number; poolPri
   priceHistory.set(poolId, sorted.slice(-MAX_HISTORY));
 }
 
+// Band lifecycle tracking
+export interface BandEvent {
+  tokenId: number;
+  tickLower: number;
+  tickUpper: number;
+  openTime: number;
+  closeTime: number | null;
+}
+
+const bandEvents: Map<string, BandEvent[]> = new Map();
+
+export function recordBandOpen(poolId: string, tokenId: number, tickLower: number, tickUpper: number): void {
+  if (!bandEvents.has(poolId)) bandEvents.set(poolId, []);
+  const events = bandEvents.get(poolId)!;
+  if (!events.find((e) => e.tokenId === tokenId && e.closeTime === null)) {
+    events.push({ tokenId, tickLower, tickUpper, openTime: Math.floor(Date.now() / 1000), closeTime: null });
+  }
+}
+
+export function recordBandClose(poolId: string, tokenId: number): void {
+  const events = bandEvents.get(poolId);
+  if (!events) return;
+  const band = events.find((e) => e.tokenId === tokenId && e.closeTime === null);
+  if (band) band.closeTime = Math.floor(Date.now() / 1000);
+}
+
+export function importBandEvents(poolId: string, data: BandEvent[]): void {
+  const existing = bandEvents.get(poolId) ?? [];
+  bandEvents.set(poolId, [...data, ...existing]);
+}
+
+export function getBandEvents(poolId: string): BandEvent[] {
+  return bandEvents.get(poolId) ?? [];
+}
+
 export function updatePoolStatus(poolId: string, status: Partial<PoolStatus>): void {
   const existing = botStatus.pools.find((p) => p.id === poolId);
   if (existing) {
@@ -119,6 +154,10 @@ export function startHealthServer(port: number): void {
 
   app.get('/api/history/:poolId', (req, res) => {
     res.json(getPriceHistory(req.params.poolId));
+  });
+
+  app.get('/api/bands/:poolId', (req, res) => {
+    res.json(getBandEvents(req.params.poolId));
   });
 
   app.get('/dashboard', (_req, res) => {
@@ -205,7 +244,7 @@ function getDashboardHtml(): string {
       <button onclick="setChartRange(604800)" class="range-btn active">7d</button>
     </div>
   </div>
-  <div id="chart-container" style="height:400px"></div>
+  <div id="chart-container" style="height:400px;position:relative"></div>
   <div class="muted" style="font-size:0.75rem;margin-top:4px">Blue: BTC/USD (CoinGecko) &middot; Red: Pool price (svJUSD/WCBTC)</div>
 </div>
 
@@ -379,6 +418,7 @@ var poolSeries = null;
 var cgSeries = null;
 var chartRangeSeconds = 604800;
 var allHistory = [];
+var allBands = [];
 
 async function initChart() {
   var LWC = window.LightweightCharts || window.lwc;
@@ -394,6 +434,8 @@ async function initChart() {
   poolSeries = chart.addLineSeries({ color: '#ef4444', lineWidth: 2, title: 'Pool' });
   cgSeries = chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, title: 'CoinGecko' });
   chart.timeScale().fitContent();
+  chart.timeScale().subscribeVisibleLogicalRangeChange(renderBandOverlays);
+  chart.subscribeCrosshairMove(renderBandOverlays);
 }
 
 async function refreshChart() {
@@ -405,6 +447,10 @@ async function refreshChart() {
 
     document.getElementById('chart-card').style.display = 'block';
     if (!chart) { await initChart(); if (!chart) return; }
+
+    // Load band events
+    var bRes = await fetch('/api/bands/' + poolId);
+    allBands = await bRes.json();
 
     applyChartRange();
   } catch(e) { console.error('Chart error:', e); }
@@ -429,6 +475,44 @@ function applyChartRange() {
     cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
   }
   chart.timeScale().fitContent();
+  renderBandOverlays();
+}
+
+function renderBandOverlays() {
+  var container = document.getElementById('chart-container');
+  // Remove old overlays
+  container.querySelectorAll('.band-overlay').forEach(function(el) { el.remove(); });
+  if (!chart || !poolSeries || allBands.length === 0) return;
+
+  var now = Math.floor(Date.now() / 1000);
+  var colors = ['rgba(30,41,59,0.3)', 'rgba(49,46,129,0.3)', 'rgba(20,83,45,0.3)', 'rgba(20,83,45,0.4)', 'rgba(20,83,45,0.3)', 'rgba(49,46,129,0.3)', 'rgba(30,41,59,0.3)'];
+
+  allBands.forEach(function(band, idx) {
+    var rawLower = Math.pow(1.0001, band.tickLower);
+    var rawUpper = Math.pow(1.0001, band.tickUpper);
+    var priceTop = rawLower < 0.01 ? 1 / rawLower : rawUpper;
+    var priceBottom = rawLower < 0.01 ? 1 / rawUpper : rawLower;
+
+    var yTop = poolSeries.priceToCoordinate(priceTop);
+    var yBottom = poolSeries.priceToCoordinate(priceBottom);
+    if (yTop === null || yBottom === null) return;
+
+    var xLeft = chart.timeScale().timeToCoordinate(band.openTime);
+    var xRight = band.closeTime ? chart.timeScale().timeToCoordinate(band.closeTime) : container.clientWidth;
+    if (xLeft === null) xLeft = 0;
+    if (xRight === null) xRight = container.clientWidth;
+
+    var div = document.createElement('div');
+    div.className = 'band-overlay';
+    div.style.cssText = 'position:absolute;pointer-events:none;' +
+      'left:' + Math.min(xLeft, xRight) + 'px;' +
+      'top:' + Math.min(yTop, yBottom) + 'px;' +
+      'width:' + Math.abs(xRight - xLeft) + 'px;' +
+      'height:' + Math.abs(yBottom - yTop) + 'px;' +
+      'background:' + (colors[idx % colors.length]) + ';' +
+      'border:1px solid rgba(255,255,255,0.1);';
+    container.appendChild(div);
+  });
 }
 
 refreshChart();

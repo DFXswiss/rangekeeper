@@ -3,7 +3,7 @@ import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
 import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
 import { readFileSync, existsSync } from 'fs';
-import { updatePoolStatus, importPriceHistory } from './health/health-server';
+import { updatePoolStatus, importPriceHistory, importBandEvents } from './health/health-server';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -83,6 +83,24 @@ async function main(): Promise<void> {
       logger.info({ entries: seedData.length }, 'Loaded price history seed data');
     } catch (err) {
       logger.warn({ err }, 'Failed to load price history seed data');
+    }
+  }
+
+  // Load band events seed data
+  const bandSeedPaths = [
+    path.join(dataDir, 'band-events-seed.json'),
+    path.resolve(process.cwd(), 'data-seed', 'band-events-seed.json'),
+  ];
+  const bandSeedPath = bandSeedPaths.find((p) => existsSync(p));
+  if (bandSeedPath) {
+    try {
+      const bandSeedData = JSON.parse(readFileSync(bandSeedPath, 'utf-8'));
+      for (const pool of pools) {
+        importBandEvents(pool.id, bandSeedData);
+      }
+      logger.info({ entries: bandSeedData.length }, 'Loaded band events seed data');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load band events seed data');
     }
   }
 

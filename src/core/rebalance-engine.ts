@@ -11,7 +11,7 @@ import { BalanceTracker } from './balance-tracker';
 import { StateStore, RebalanceStage, BandState } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
-import { updatePoolStatus, recordPrice } from '../health/health-server';
+import { updatePoolStatus, recordPrice, recordBandOpen, recordBandClose } from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
@@ -511,6 +511,7 @@ export class RebalanceEngine {
           tickLower: bandConfig.tickLower,
           tickUpper: bandConfig.tickUpper,
         });
+        recordBandOpen(poolEntry.id, result.tokenId.toNumber(), bandConfig.tickLower, bandConfig.tickUpper);
       }
 
       this.bandManager.setBands(bands, layout.bandTickWidth);
@@ -600,6 +601,7 @@ export class RebalanceEngine {
       }
 
       this.bandManager.removeBand(bandToDissolve.tokenId);
+      recordBandClose(poolEntry.id, bandToDissolve.tokenId.toNumber());
 
       // Checkpoint: band dissolved, funds in wallet
       this.persistCheckpoint(
@@ -696,6 +698,7 @@ export class RebalanceEngine {
         { tokenId: mintResult.tokenId, tickLower: newBandTicks.tickLower, tickUpper: newBandTicks.tickUpper },
         direction === 'lower' ? 'start' : 'end',
       );
+      recordBandOpen(poolEntry.id, mintResult.tokenId.toNumber(), newBandTicks.tickLower, newBandTicks.tickUpper);
 
       this.lastRebalanceTime = Date.now();
       this.consecutiveErrors = 0;
