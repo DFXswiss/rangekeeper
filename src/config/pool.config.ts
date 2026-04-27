@@ -49,6 +49,20 @@ const strategySchema = z.object({
   depegThresholdPercent: z.number().positive().max(50).optional(),
 });
 
+const wrapperSchema = z.object({
+  wrappedToken: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase())),
+  type: z.enum(['native', 'erc4626']),
+  underlyingToken: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase()))
+    .optional(),
+  gasReserve: z.string().optional(),
+});
+
 const monitoringSchema = z.object({
   checkIntervalSeconds: z.number().int().min(5).max(3600),
 });
@@ -59,6 +73,7 @@ const poolConfigSchema = z.object({
   pool: poolSchema,
   strategy: strategySchema,
   monitoring: monitoringSchema,
+  wrappers: z.array(wrapperSchema).optional().default([]),
 });
 
 const poolsFileSchema = z.object({
