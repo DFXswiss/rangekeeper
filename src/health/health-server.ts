@@ -41,6 +41,23 @@ const botStatus: BotStatus = {
 
 const startTime = Date.now();
 
+// Price history ring buffer (24h at 30s intervals = 2880 entries)
+const MAX_HISTORY = 2880;
+const priceHistory: Map<string, { time: number; poolPrice: number }[]> = new Map();
+
+export function recordPrice(poolId: string, tick: number, token0Decimals: number, token1Decimals: number): void {
+  if (!priceHistory.has(poolId)) priceHistory.set(poolId, []);
+  const history = priceHistory.get(poolId)!;
+  const rawPrice = Math.pow(1.0001, tick);
+  const poolPrice = rawPrice < 0.01 ? 1 / rawPrice : rawPrice;
+  history.push({ time: Math.floor(Date.now() / 1000), poolPrice });
+  if (history.length > MAX_HISTORY) history.shift();
+}
+
+export function getPriceHistory(poolId: string): { time: number; poolPrice: number }[] {
+  return priceHistory.get(poolId) ?? [];
+}
+
 export function updatePoolStatus(poolId: string, status: Partial<PoolStatus>): void {
   const existing = botStatus.pools.find((p) => p.id === poolId);
   if (existing) {
@@ -74,6 +91,10 @@ export function startHealthServer(port: number): void {
     res.json(getBotStatus());
   });
 
+  app.get('/api/history/:poolId', (req, res) => {
+    res.json(getPriceHistory(req.params.poolId));
+  });
+
   app.get('/dashboard', (_req, res) => {
     res.type('html').send(getDashboardHtml());
   });
@@ -90,6 +111,7 @@ function getDashboardHtml(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RangeKeeper Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 24px; max-width: 960px; margin: 0 auto; }
@@ -143,6 +165,12 @@ function getDashboardHtml(): string {
 
 <div id="pools-container"></div>
 
+</div>
+
+<div class="card" id="chart-card" style="display:none">
+  <h2>Price History</h2>
+  <div id="chart-container" style="height:400px"></div>
+  <div class="muted" style="font-size:0.75rem;margin-top:4px">Blue: CoinGecko BTC/USD &middot; Red: Pool price (svJUSD/WCBTC)</div>
 </div>
 
 <div class="refresh-info">Auto-refreshes every 30s</div>
@@ -315,6 +343,53 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, 30000);
+
+// Price chart
+var chart = null;
+var poolSeries = null;
+var cgSeries = null;
+
+async function initChart() {
+  if (!window.LightweightCharts) return;
+  var container = document.getElementById('chart-container');
+  chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: '#161616' }, textColor: '#888' },
+    grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+    timeScale: { timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: '#2a2a2a' },
+    crosshair: { mode: 0 },
+  });
+  poolSeries = chart.addLineSeries({ color: '#ef4444', lineWidth: 2, title: 'Pool' });
+  cgSeries = chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, title: 'CoinGecko' });
+  chart.timeScale().fitContent();
+}
+
+async function refreshChart() {
+  if (!chart) await initChart();
+  if (!chart) return;
+
+  try {
+    // Pool price history from bot
+    var res = await fetch('/api/history/svjusd-wcbtc-citrea');
+    var history = await res.json();
+    if (history.length > 0) {
+      document.getElementById('chart-card').style.display = 'block';
+      poolSeries.setData(history.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
+    }
+
+    // CoinGecko 24h BTC price
+    var cgRes = await fetch('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1');
+    var cgData = await cgRes.json();
+    if (cgData.prices) {
+      cgSeries.setData(cgData.prices.map(function(p) { return { time: Math.floor(p[0] / 1000), value: p[1] }; }));
+    }
+
+    chart.timeScale().fitContent();
+  } catch(e) {}
+}
+
+refreshChart();
+setInterval(refreshChart, 60000);
 </script>
 </body>
 </html>`;
