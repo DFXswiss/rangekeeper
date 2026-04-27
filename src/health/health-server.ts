@@ -166,6 +166,9 @@ function getDashboardHtml(): string {
   td { padding: 6px 8px; border-bottom: 1px solid #1a1a1a; font-variant-numeric: tabular-nums; }
   #error-banner { display: none; background: #7f1d1d; border: 1px solid #991b1b; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
   #loading { color: #888; text-align: center; padding: 48px; }
+  .range-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+  .range-btn:hover { background: #2a2a2a; color: #e0e0e0; }
+  .range-btn.active { background: #14532d; color: #4ade80; border-color: #4ade80; }
   .refresh-info { color: #555; font-size: 0.75rem; text-align: right; margin-top: 8px; }
 </style>
 </head>
@@ -194,7 +197,14 @@ function getDashboardHtml(): string {
 </div>
 
 <div class="card" id="chart-card" style="display:none">
-  <h2>Price History</h2>
+  <div style="display:flex;align-items:center;justify-content:space-between">
+    <h2>Price History</h2>
+    <div id="chart-range-btns" style="display:flex;gap:4px">
+      <button onclick="setChartRange(3600)" class="range-btn">1h</button>
+      <button onclick="setChartRange(86400)" class="range-btn">24h</button>
+      <button onclick="setChartRange(604800)" class="range-btn active">7d</button>
+    </div>
+  </div>
   <div id="chart-container" style="height:400px"></div>
   <div class="muted" style="font-size:0.75rem;margin-top:4px">Blue: BTC/USD (CoinGecko) &middot; Red: Pool price (svJUSD/WCBTC)</div>
 </div>
@@ -367,6 +377,8 @@ setInterval(refresh, 30000);
 var chart = null;
 var poolSeries = null;
 var cgSeries = null;
+var chartRangeSeconds = 604800;
+var allHistory = [];
 
 async function initChart() {
   var LWC = window.LightweightCharts || window.lwc;
@@ -388,21 +400,35 @@ async function refreshChart() {
   try {
     var poolId = 'svjusd-wcbtc-citrea';
     var res = await fetch('/api/history/' + poolId);
-    var history = await res.json();
-    if (history.length < 2) return;
+    allHistory = await res.json();
+    if (allHistory.length < 2) return;
 
     document.getElementById('chart-card').style.display = 'block';
     if (!chart) { await initChart(); if (!chart) return; }
 
-    poolSeries.setData(history.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
-
-    var cgPoints = history.filter(function(h) { return h.refPrice !== null; });
-    if (cgPoints.length > 0) {
-      cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
-    }
-
-    chart.timeScale().fitContent();
+    applyChartRange();
   } catch(e) { console.error('Chart error:', e); }
+}
+
+function setChartRange(seconds) {
+  chartRangeSeconds = seconds;
+  document.querySelectorAll('.range-btn').forEach(function(b) { b.classList.remove('active'); });
+  event.target.classList.add('active');
+  applyChartRange();
+}
+
+function applyChartRange() {
+  if (!chart || allHistory.length === 0) return;
+  var cutoff = Math.floor(Date.now() / 1000) - chartRangeSeconds;
+  var filtered = allHistory.filter(function(h) { return h.time >= cutoff; });
+  if (filtered.length < 1) filtered = allHistory;
+
+  poolSeries.setData(filtered.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
+  var cgPoints = filtered.filter(function(h) { return h.refPrice !== null; });
+  if (cgPoints.length > 0) {
+    cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
+  }
+  chart.timeScale().fitContent();
 }
 
 refreshChart();
