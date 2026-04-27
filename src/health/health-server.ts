@@ -404,9 +404,11 @@ async function refresh() {
         var hRes = await fetch('/api/history/' + pool.id);
         var hist = await hRes.json();
         var last = hist.length > 0 ? hist[hist.length - 1] : null;
-        if (last && last.refPrice && rawPrice < 0.01) {
+        var lastRef = null;
+        for (var i = hist.length - 1; i >= 0; i--) { if (hist[i].refPrice) { lastRef = hist[i]; break; } }
+        if (last && rawPrice < 0.01) {
           var vr = last.vaultRate || 1;
-          html += '<div style="font-size:0.7rem;color:#888;margin-top:2px">CoinGecko BTC: $' + formatNumber(last.refPrice.toFixed(0)) + '</div>';
+          if (lastRef) html += '<div style="font-size:0.7rem;color:#888;margin-top:2px">CoinGecko BTC: $' + formatNumber(lastRef.refPrice.toFixed(0)) + '</div>';
           html += '<div style="font-size:0.7rem;color:#888">Pool BTC: $' + formatNumber(last.poolPrice.toFixed(0)) + '</div>';
           html += '<div style="font-size:0.7rem;color:#888">1 ' + pool.token0Symbol + ' = $' + formatNumber(vr.toFixed(4)) + '</div>';
         }
