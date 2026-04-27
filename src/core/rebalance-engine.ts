@@ -1,4 +1,4 @@
-import { BigNumber, providers, utils } from 'ethers';
+import { BigNumber, Contract, providers, utils } from 'ethers';
 import { getLogger } from '../util/logger';
 import { PoolMonitor, PoolState, PositionRange } from './pool-monitor';
 import { PositionManager, RemoveResult } from './position-manager';
@@ -59,6 +59,8 @@ export class RebalanceEngine {
   private lastRebalanceTime = 0;
   private consecutiveErrors = 0;
   private rebalanceLock = false;
+  private vaultRate = 1;
+  private lastVaultRateFetch = 0;
 
   constructor(private readonly ctx: RebalanceContext) {}
 
@@ -254,7 +256,8 @@ export class RebalanceEngine {
 
     const { poolEntry } = this.ctx;
 
-    recordPrice(poolEntry.id, poolState.tick).catch(() => {});
+    const vaultRate = await this.fetchVaultRate();
+    recordPrice(poolEntry.id, poolState.tick, vaultRate).catch(() => {});
 
     updatePoolStatus(poolEntry.id, {
       state: this.state,
@@ -274,6 +277,7 @@ export class RebalanceEngine {
       poolAddress: undefined, // set during init
       token0Symbol: poolEntry.pool.token0.symbol,
       token1Symbol: poolEntry.pool.token1.symbol,
+      vaultRate,
     });
 
     // Check depeg
@@ -759,6 +763,29 @@ export class RebalanceEngine {
     this.setState('STOPPED');
     this.ctx.poolMonitor.stopMonitoring();
     this.logger.info({ poolId: this.ctx.poolEntry.id }, 'Rebalance engine stopped');
+  }
+
+  private async fetchVaultRate(): Promise<number> {
+    const now = Date.now();
+    if (now - this.lastVaultRateFetch < 300_000) return this.vaultRate;
+
+    const vaultWrapper = this.ctx.poolEntry.wrappers?.find((w) => w.type === 'erc4626');
+    if (!vaultWrapper) return 1;
+
+    try {
+      const vault = new Contract(
+        vaultWrapper.wrappedToken,
+        ['function convertToAssets(uint256 shares) view returns (uint256)'],
+        this.ctx.wallet,
+      );
+      const oneShare = BigNumber.from(10).pow(18);
+      const assets: BigNumber = await vault.convertToAssets(oneShare);
+      this.vaultRate = parseFloat(utils.formatUnits(assets, 18));
+      this.lastVaultRateFetch = now;
+    } catch (err) {
+      this.logger.warn({ err }, 'Failed to fetch vault rate');
+    }
+    return this.vaultRate;
   }
 
   private setState(newState: RebalanceState): void {

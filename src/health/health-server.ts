@@ -31,6 +31,7 @@ export interface PoolStatus {
   poolAddress?: string;
   token0Symbol?: string;
   token1Symbol?: string;
+  vaultRate?: number;
 }
 
 const botStatus: BotStatus = {
@@ -43,7 +44,7 @@ const startTime = Date.now();
 
 // Price history ring buffer (7 days at 30s intervals = ~20160 entries)
 const MAX_HISTORY = 20160;
-const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: number | null }[]> = new Map();
+const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: number | null; vaultRate: number }[]> = new Map();
 let cachedRefPrice: number | null = null;
 let lastRefFetch = 0;
 
@@ -59,24 +60,29 @@ async function fetchRefPrice(): Promise<void> {
   }
 }
 
-export async function recordPrice(poolId: string, tick: number): Promise<void> {
+export async function recordPrice(poolId: string, tick: number, vaultRate = 1): Promise<void> {
   await fetchRefPrice();
   if (!priceHistory.has(poolId)) priceHistory.set(poolId, []);
   const history = priceHistory.get(poolId)!;
   const rawPrice = Math.pow(1.0001, tick);
-  const poolPrice = rawPrice < 0.01 ? 1 / rawPrice : rawPrice;
-  history.push({ time: Math.floor(Date.now() / 1000), poolPrice, refPrice: cachedRefPrice });
+  // Multiply by vaultRate to convert from svJUSD to USD (1 svJUSD > 1 JUSD due to vault interest)
+  const poolPrice = (rawPrice < 0.01 ? 1 / rawPrice : rawPrice) * vaultRate;
+  history.push({ time: Math.floor(Date.now() / 1000), poolPrice, refPrice: cachedRefPrice, vaultRate });
   if (history.length > MAX_HISTORY) history.shift();
 }
 
-export function getPriceHistory(poolId: string): { time: number; poolPrice: number; refPrice: number | null }[] {
+export function getPriceHistory(poolId: string): { time: number; poolPrice: number; refPrice: number | null; vaultRate: number }[] {
   return priceHistory.get(poolId) ?? [];
 }
 
-export function importPriceHistory(poolId: string, data: { time: number; poolPrice: number; refPrice: number | null }[]): void {
+export function importPriceHistory(
+  poolId: string,
+  data: { time: number; poolPrice: number; refPrice: number | null; vaultRate?: number }[],
+): void {
   const existing = priceHistory.get(poolId) ?? [];
-  // Prepend imported data, then append existing (live data takes priority)
-  const merged = [...data, ...existing];
+  // Prepend imported data (default vaultRate to 1 for legacy entries), then append existing
+  const normalized = data.map((d) => ({ ...d, vaultRate: d.vaultRate ?? 1 }));
+  const merged = [...normalized, ...existing];
   // Deduplicate by time, keep last
   const seen = new Map<number, typeof merged[0]>();
   for (const entry of merged) seen.set(entry.time, entry);
@@ -245,7 +251,7 @@ function getDashboardHtml(): string {
     </div>
   </div>
   <div id="chart-container" style="height:400px;position:relative"></div>
-  <div class="muted" style="font-size:0.75rem;margin-top:4px">Blue: BTC/USD (CoinGecko) &middot; Red: Pool price (svJUSD/WCBTC)</div>
+  <div class="muted" style="font-size:0.75rem;margin-top:4px">Blue: BTC/USD (CoinGecko) &middot; Red: BTC/USD (Pool, vault-rate adjusted)</div>
 </div>
 
 <div class="refresh-info">Auto-refreshes every 30s</div>
@@ -325,15 +331,16 @@ function renderPool(pool) {
   // Band table with integrated visualization
   if (bandCount > 0) {
     const priceLabel = formatPriceLabel(pool);
-    html += '<table style="margin-top:16px"><thead><tr><th>Band</th><th>Zone</th><th></th><th>Price Range (' + priceLabel + ')</th><th class="muted">Tick Range</th></tr></thead><tbody>';
+    var vr = pool.vaultRate || 1;
+    html += '<table style="margin-top:16px"><thead><tr><th>Band</th><th>Zone</th><th></th><th>Price Range (' + priceLabel + ' in USD)</th><th class="muted">Tick Range</th></tr></thead><tbody>';
     for (let ri = 0; ri < bandCount; ri++) {
       const b = pool.bands[ri];
       const isActive = ri === pool.activeBand;
       const rawLower = tickToPrice(b.tickLower);
       const rawUpper = tickToPrice(b.tickUpper);
       const isInverted = rawLower < 0.01;
-      const priceHigh = isInverted ? formatPrice(rawLower) : formatPrice(rawUpper);
-      const priceLow = isInverted ? formatPrice(rawUpper) : formatPrice(rawLower);
+      const priceHigh = isInverted ? formatPrice(1 / rawLower * vr) : formatPrice(rawUpper * vr);
+      const priceLow = isInverted ? formatPrice(1 / rawUpper * vr) : formatPrice(rawLower * vr);
       html += '<tr' + (isActive ? ' style="color:#fff;font-weight:600"' : '') + '>';
       html += '<td>' + (ri + 1) + '</td><td>' + ZONE_LABELS[ri] + '</td>';
       html += '<td><div class="band-cell ' + ZONE_CLASSES[ri] + (isActive ? ' active' : '') + '"></div></td>';
@@ -390,16 +397,18 @@ async function refresh() {
       const el = document.getElementById('pool-price-' + pool.id);
       if (!el || pool.currentTick === undefined) return;
       const rawPrice = tickToPrice(pool.currentTick);
-      const poolPrice = formatPrice(rawPrice);
-      const label = rawPrice < 0.01 ? pool.token0Symbol + '/' + pool.token1Symbol : pool.token1Symbol + '/' + pool.token0Symbol;
-      var html = poolPrice + ' ' + label;
+      const pvr = pool.vaultRate || 1;
+      const adjustedPrice = rawPrice < 0.01 ? (1 / rawPrice) * pvr : rawPrice * pvr;
+      var html = '$' + formatPrice(adjustedPrice) + ' BTC/USD';
       try {
         var hRes = await fetch('/api/history/' + pool.id);
         var hist = await hRes.json();
         var last = hist.length > 0 ? hist[hist.length - 1] : null;
         if (last && last.refPrice && rawPrice < 0.01) {
+          var vr = last.vaultRate || 1;
           html += '<div style="font-size:0.7rem;color:#888;margin-top:2px">CoinGecko BTC: $' + formatNumber(last.refPrice.toFixed(0)) + '</div>';
-          html += '<div style="font-size:0.7rem;color:#888">1 ' + pool.token0Symbol + ' = $' + formatNumber((last.refPrice / last.poolPrice).toFixed(2)) + '</div>';
+          html += '<div style="font-size:0.7rem;color:#888">Pool BTC: $' + formatNumber(last.poolPrice.toFixed(0)) + '</div>';
+          html += '<div style="font-size:0.7rem;color:#888">1 ' + pool.token0Symbol + ' = $' + formatNumber(vr.toFixed(4)) + '</div>';
         }
       } catch(e) {}
       el.innerHTML = html;
@@ -484,14 +493,14 @@ function renderBandOverlays() {
   container.querySelectorAll('.band-overlay').forEach(function(el) { el.remove(); });
   if (!chart || !poolSeries || allBands.length === 0) return;
 
-  var now = Math.floor(Date.now() / 1000);
   var colors = ['rgba(30,41,59,0.3)', 'rgba(49,46,129,0.3)', 'rgba(20,83,45,0.3)', 'rgba(20,83,45,0.4)', 'rgba(20,83,45,0.3)', 'rgba(49,46,129,0.3)', 'rgba(30,41,59,0.3)'];
+  var latestVaultRate = allHistory.length > 0 ? (allHistory[allHistory.length - 1].vaultRate || 1) : 1;
 
   allBands.forEach(function(band, idx) {
     var rawLower = Math.pow(1.0001, band.tickLower);
     var rawUpper = Math.pow(1.0001, band.tickUpper);
-    var priceTop = rawLower < 0.01 ? 1 / rawLower : rawUpper;
-    var priceBottom = rawLower < 0.01 ? 1 / rawUpper : rawLower;
+    var priceTop = (rawLower < 0.01 ? 1 / rawLower : rawUpper) * latestVaultRate;
+    var priceBottom = (rawLower < 0.01 ? 1 / rawUpper : rawLower) * latestVaultRate;
 
     var yTop = poolSeries.priceToCoordinate(priceTop);
     var yBottom = poolSeries.priceToCoordinate(priceBottom);
