@@ -23,8 +23,8 @@ pools:
       minRebalanceIntervalMinutes: 30
       maxGasCostUsd: 5.0
       slippageTolerancePercent: 0.5
-      expectedPriceRatio: 1.0 # expected ZCHF/USDT price (for depeg detection)
-      depegThresholdPercent: 5.0 # alert if price deviates more than 5%
+      expectedPriceRatio: 1.27 # ZCHF/USDT price (CHF is stronger than USD)
+      depegThresholdPercent: 10.0 # CHF/USD fluctuates, needs wider threshold
     monitoring:
       checkIntervalSeconds: 30
 
