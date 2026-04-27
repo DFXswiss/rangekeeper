@@ -174,6 +174,7 @@ async function main(): Promise<void> {
 
       // Wrap tokens (cBTC→WCBTC, JUSD→svJUSD) before engine starts
       if (poolEntry.wrappers && poolEntry.wrappers.length > 0 && !env.DRY_RUN) {
+        if (nonceTracker) await nonceTracker.initialize();
         const tokenWrapper = new TokenWrapper(() => wallet, nonceTracker);
         for (const wrapConfig of poolEntry.wrappers) {
           try {
