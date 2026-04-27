@@ -23,6 +23,14 @@ export interface PoolStatus {
   activeBand?: number;
   lastRebalance?: string;
   portfolioValueUsd?: number;
+  consecutiveErrors?: number;
+  emergencyStopped?: boolean;
+  emergencyReason?: string;
+  walletAddress?: string;
+  chainId?: number;
+  poolAddress?: string;
+  token0Symbol?: string;
+  token1Symbol?: string;
 }
 
 const botStatus: BotStatus = {
@@ -66,7 +74,195 @@ export function startHealthServer(port: number): void {
     res.json(getBotStatus());
   });
 
+  app.get('/dashboard', (_req, res) => {
+    res.type('html').send(getDashboardHtml());
+  });
+
   app.listen(port, () => {
     logger.info({ port }, 'Health server listening');
   });
 }
+
+function getDashboardHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RangeKeeper Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 24px; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 8px; }
+  .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 24px; }
+  .card { background: #161616; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 1.1rem; margin-bottom: 12px; color: #fff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .metric { background: #1a1a1a; border-radius: 6px; padding: 12px; }
+  .metric .label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+  .metric .value { font-size: 1.3rem; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .ok { color: #4ade80; }
+  .warn { color: #fbbf24; }
+  .error { color: #f87171; }
+  .muted { color: #666; }
+  .band-bar { display: flex; margin: 8px 0; border-radius: 4px; overflow: hidden; height: 32px; }
+  .band-bar .band { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 600; border-right: 1px solid #0a0a0a; }
+  .band-bar .buffer { background: #1e293b; color: #64748b; }
+  .band-bar .trigger { background: #312e81; color: #818cf8; }
+  .band-bar .safe { background: #14532d; color: #4ade80; }
+  .band-bar .active { outline: 2px solid #fff; outline-offset: -2px; }
+  .links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .links a { color: #60a5fa; text-decoration: none; font-size: 0.85rem; padding: 4px 10px; background: #1e293b; border-radius: 4px; }
+  .links a:hover { background: #2d3a4f; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th { text-align: left; color: #888; font-weight: 500; padding: 6px 8px; border-bottom: 1px solid #2a2a2a; }
+  td { padding: 6px 8px; border-bottom: 1px solid #1a1a1a; font-variant-numeric: tabular-nums; }
+  #error-banner { display: none; background: #7f1d1d; border: 1px solid #991b1b; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  #loading { color: #888; text-align: center; padding: 48px; }
+  .refresh-info { color: #555; font-size: 0.75rem; text-align: right; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>RangeKeeper</h1>
+<p class="subtitle">Autonomous Uniswap V3 Liquidity Provisioning</p>
+
+<div id="error-banner"></div>
+<div id="loading">Loading...</div>
+<div id="content" style="display:none">
+
+<div class="card">
+  <h2>Bot Status</h2>
+  <div class="grid">
+    <div class="metric"><div class="label">Status</div><div class="value" id="bot-state">-</div></div>
+    <div class="metric"><div class="label">Uptime</div><div class="value" id="bot-uptime">-</div></div>
+    <div class="metric"><div class="label">Mode</div><div class="value" id="bot-mode">-</div></div>
+    <div class="metric"><div class="label">Errors</div><div class="value" id="bot-errors">-</div></div>
+  </div>
+</div>
+
+<div id="pools-container"></div>
+
+</div>
+
+<div class="refresh-info">Auto-refreshes every 30s</div>
+
+<script>
+const ZONE_LABELS = ['Buffer', 'Trigger', 'Safe', 'Safe', 'Safe', 'Trigger', 'Buffer'];
+const ZONE_CLASSES = ['buffer', 'trigger', 'safe', 'safe', 'safe', 'trigger', 'buffer'];
+
+function formatUptime(s) {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  return h + 'h ' + m + 'm';
+}
+
+function explorerUrl(chainId, type, address) {
+  if (chainId === 4114) return 'https://citreascan.com/' + type + '/' + address;
+  return 'https://etherscan.io/' + type + '/' + address;
+}
+
+function poolUrl(chainId, poolAddress) {
+  if (chainId === 4114) return 'https://juiceswap.com/explore/pools/citrea_mainnet/' + poolAddress;
+  return 'https://app.uniswap.org/explore/pools/' + poolAddress;
+}
+
+function renderPool(pool) {
+  const stopped = pool.emergencyStopped;
+  const stateClass = stopped ? 'error' : pool.state === 'MONITORING' ? 'ok' : 'warn';
+  const stateText = stopped ? 'STOPPED' : pool.state;
+  const bandCount = (pool.bands || []).length;
+  const wallet = pool.walletAddress || '-';
+  const chainId = pool.chainId || 1;
+  const poolAddr = pool.poolAddress || '';
+
+  let html = '<div class="card"><h2>' + (pool.token0Symbol||'?') + ' / ' + (pool.token1Symbol||'?') + ' <span class="muted" style="font-size:0.8rem">(' + pool.id + ')</span></h2>';
+
+  html += '<div class="grid">';
+  html += '<div class="metric"><div class="label">Engine State</div><div class="value ' + stateClass + '">' + stateText + '</div></div>';
+  html += '<div class="metric"><div class="label">Bands</div><div class="value ' + (bandCount===7?'ok':'warn') + '">' + bandCount + ' / 7</div></div>';
+  html += '<div class="metric"><div class="label">Active Band</div><div class="value">' + (pool.activeBand !== undefined ? pool.activeBand + ' (' + ZONE_LABELS[pool.activeBand] + ')' : '-') + '</div></div>';
+  html += '<div class="metric"><div class="label">Current Tick</div><div class="value">' + (pool.currentTick ?? '-') + '</div></div>';
+  html += '</div>';
+
+  if (stopped && pool.emergencyReason) {
+    html += '<div style="margin-top:12px;padding:10px;background:#7f1d1d;border-radius:4px;font-size:0.85rem">' + pool.emergencyReason + '</div>';
+  }
+
+  // Band visualization
+  if (bandCount > 0) {
+    html += '<div style="margin-top:16px"><strong style="font-size:0.85rem">Band Layout</strong>';
+    html += '<div class="band-bar">';
+    for (let i = 0; i < bandCount; i++) {
+      const b = pool.bands[i];
+      const isActive = i === pool.activeBand;
+      html += '<div class="band ' + ZONE_CLASSES[i] + (isActive ? ' active' : '') + '" title="[' + b.tickLower + ', ' + b.tickUpper + '] #' + b.tokenId + '">' + i + '</div>';
+    }
+    html += '</div></div>';
+
+    // Band table
+    html += '<table style="margin-top:8px"><thead><tr><th>#</th><th>Zone</th><th>Tick Range</th><th>Token ID</th></tr></thead><tbody>';
+    for (let i = 0; i < bandCount; i++) {
+      const b = pool.bands[i];
+      const isActive = i === pool.activeBand;
+      html += '<tr' + (isActive ? ' style="color:#fff;font-weight:600"' : '') + '>';
+      html += '<td>' + i + '</td><td>' + ZONE_LABELS[i] + '</td><td>[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
+      html += '<td><a href="' + explorerUrl(chainId, 'token', pool.bands[0].tokenId ? poolAddr : '') + '" style="color:#60a5fa">' + b.tokenId + '</a></td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+  }
+
+  // Links
+  html += '<div class="links" style="margin-top:16px">';
+  html += '<a href="' + explorerUrl(chainId, 'address', wallet) + '">Wallet on Explorer</a>';
+  if (poolAddr) html += '<a href="' + poolUrl(chainId, poolAddr) + '">Pool on DEX</a>';
+  if (poolAddr) html += '<a href="' + explorerUrl(chainId, 'address', poolAddr) + '">Pool Contract</a>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/status');
+    const data = await res.json();
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+
+    const hasError = data.pools.some(p => p.emergencyStopped);
+    document.getElementById('bot-state').textContent = hasError ? 'ERROR' : 'Running';
+    document.getElementById('bot-state').className = 'value ' + (hasError ? 'error' : 'ok');
+    document.getElementById('bot-uptime').textContent = formatUptime(data.uptime);
+    document.getElementById('bot-mode').textContent = data.dryRun ? 'Dry Run' : 'Live';
+    document.getElementById('bot-mode').className = 'value ' + (data.dryRun ? 'warn' : 'ok');
+
+    const totalErrors = data.pools.reduce((s,p) => s + (p.consecutiveErrors||0), 0);
+    document.getElementById('bot-errors').textContent = totalErrors;
+    document.getElementById('bot-errors').className = 'value ' + (totalErrors > 0 ? 'warn' : 'ok');
+
+    const banner = document.getElementById('error-banner');
+    if (data.lastError) {
+      banner.style.display = 'block';
+      banner.textContent = data.lastError;
+    } else {
+      banner.style.display = 'none';
+    }
+
+    const container = document.getElementById('pools-container');
+    container.innerHTML = data.pools.map(renderPool).join('');
+  } catch (e) {
+    document.getElementById('loading').textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>`;
+}
+

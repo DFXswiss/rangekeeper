@@ -2,6 +2,7 @@ import path from 'path';
 import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
 import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
+import { updatePoolStatus } from './health/health-server';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -93,6 +94,14 @@ async function main(): Promise<void> {
       }
 
       logger.info({ poolId: poolEntry.id, poolAddress }, 'Pool resolved');
+
+      updatePoolStatus(poolEntry.id, {
+        walletAddress: wallet.address,
+        chainId: poolEntry.chain.chainId,
+        poolAddress,
+        token0Symbol: poolEntry.pool.token0.symbol,
+        token1Symbol: poolEntry.pool.token1.symbol,
+      });
 
       let poolContract = getPoolContract(poolAddress, wallet);
       const poolMonitor = new PoolMonitor(poolContract, poolEntry.id, poolEntry.monitoring.checkIntervalSeconds * 1000);
