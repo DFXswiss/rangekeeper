@@ -2,7 +2,8 @@ import path from 'path';
 import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
 import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
-import { updatePoolStatus } from './health/health-server';
+import { readFileSync, existsSync } from 'fs';
+import { updatePoolStatus, importPriceHistory } from './health/health-server';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -66,6 +67,20 @@ async function main(): Promise<void> {
   // Load pool configs
   const pools = loadPoolConfigs();
   logger.info({ poolCount: pools.length }, 'Loaded pool configurations');
+
+  // Load price history seed data if available
+  const seedPath = path.join(dataDir, 'price-history-seed.json');
+  if (existsSync(seedPath)) {
+    try {
+      const seedData = JSON.parse(readFileSync(seedPath, 'utf-8'));
+      for (const pool of pools) {
+        importPriceHistory(pool.id, seedData);
+      }
+      logger.info({ entries: seedData.length }, 'Loaded price history seed data');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load price history seed data');
+    }
+  }
 
   for (const poolEntry of pools) {
     try {
