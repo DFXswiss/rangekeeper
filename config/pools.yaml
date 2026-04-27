@@ -23,7 +23,6 @@ pools:
       minRebalanceIntervalMinutes: 30
       maxGasCostUsd: 5.0
       slippageTolerancePercent: 0.5
-      expectedPriceRatio: 1.0
-      depegThresholdPercent: 5.0
+      # No depeg detection — svJUSD/WCBTC is not a stablecoin pair
     monitoring:
       checkIntervalSeconds: 30
