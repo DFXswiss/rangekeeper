@@ -254,7 +254,7 @@ export class RebalanceEngine {
 
     const { poolEntry } = this.ctx;
 
-    recordPrice(poolEntry.id, poolState.tick, poolEntry.pool.token0.decimals, poolEntry.pool.token1.decimals);
+    recordPrice(poolEntry.id, poolState.tick).catch(() => {});
 
     updatePoolStatus(poolEntry.id, {
       state: this.state,
