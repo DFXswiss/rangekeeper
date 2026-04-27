@@ -245,9 +245,9 @@ function getDashboardHtml(): string {
   <div style="display:flex;align-items:center;justify-content:space-between">
     <h2>Price History</h2>
     <div id="chart-range-btns" style="display:flex;gap:4px">
-      <button onclick="setChartRange(3600)" class="range-btn">1h</button>
-      <button onclick="setChartRange(86400)" class="range-btn">24h</button>
-      <button onclick="setChartRange(604800)" class="range-btn active">7d</button>
+      <button onclick="setChartRange(3600, this)" class="range-btn">1h</button>
+      <button onclick="setChartRange(86400, this)" class="range-btn">24h</button>
+      <button onclick="setChartRange(604800, this)" class="range-btn active">7d</button>
     </div>
   </div>
   <div id="chart-container" style="height:400px;position:relative"></div>
@@ -467,10 +467,10 @@ async function refreshChart() {
   } catch(e) { console.error('Chart error:', e); }
 }
 
-function setChartRange(seconds) {
+function setChartRange(seconds, btn) {
   chartRangeSeconds = seconds;
   document.querySelectorAll('.range-btn').forEach(function(b) { b.classList.remove('active'); });
-  event.target.classList.add('active');
+  btn.classList.add('active');
   applyChartRange();
 }
 
@@ -482,9 +482,7 @@ function applyChartRange() {
 
   poolSeries.setData(filtered.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
   var cgPoints = filtered.filter(function(h) { return h.refPrice !== null; });
-  if (cgPoints.length > 0) {
-    cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
-  }
+  cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
   chart.timeScale().fitContent();
   renderBandOverlays();
 }
