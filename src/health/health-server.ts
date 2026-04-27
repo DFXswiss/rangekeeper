@@ -212,7 +212,7 @@ function renderPool(pool) {
   html += '<div class="metric"><div class="label">Engine State</div><div class="value ' + stateClass + '">' + stateText + '</div></div>';
   html += '<div class="metric"><div class="label">Bands</div><div class="value ' + (bandCount===7?'ok':'warn') + '">' + bandCount + ' / 7</div></div>';
   html += '<div class="metric"><div class="label">Active Band</div><div class="value">' + (pool.activeBand !== undefined ? (pool.activeBand + 1) + ' (' + ZONE_LABELS[pool.activeBand] + ')' : '-') + '</div></div>';
-  html += '<div class="metric"><div class="label">Current Price</div><div class="value">' + (pool.currentTick !== undefined ? formatPrice(tickToPrice(pool.currentTick)) + ' ' + formatPriceLabel(pool) : '-') + '</div></div>';
+  html += '<div class="metric"><div class="label">Current Price</div><div class="value" id="pool-price-' + pool.id + '">-</div></div>';
   html += '</div>';
 
   if (stopped && pool.emergencyReason) {
@@ -223,7 +223,7 @@ function renderPool(pool) {
   if (bandCount > 0) {
     const priceLabel = formatPriceLabel(pool);
     html += '<table style="margin-top:16px"><thead><tr><th>Band</th><th>Zone</th><th></th><th>Price Range (' + priceLabel + ')</th><th class="muted">Tick Range</th></tr></thead><tbody>';
-    for (let ri = bandCount - 1; ri >= 0; ri--) {
+    for (let ri = 0; ri < bandCount; ri++) {
       const b = pool.bands[ri];
       const isActive = ri === pool.activeBand;
       const rawLower = tickToPrice(b.tickLower);
@@ -234,7 +234,7 @@ function renderPool(pool) {
       html += '<tr' + (isActive ? ' style="color:#fff;font-weight:600"' : '') + '>';
       html += '<td>' + (ri + 1) + '</td><td>' + ZONE_LABELS[ri] + '</td>';
       html += '<td><div class="band-cell ' + ZONE_CLASSES[ri] + (isActive ? ' active' : '') + '"></div></td>';
-      html += '<td>' + priceHigh + ' — ' + priceLow + '</td>';
+      html += '<td>' + priceLow + ' — ' + priceHigh + '</td>';
       html += '<td class="muted">[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
       html += '</tr>';
     }
@@ -251,6 +251,17 @@ function renderPool(pool) {
   html += '</div>';
   return html;
 }
+
+let refPrice = null;
+async function fetchRefPrice() {
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+    const data = await res.json();
+    refPrice = data.bitcoin.usd;
+  } catch(e) {}
+}
+fetchRefPrice();
+setInterval(fetchRefPrice, 60000);
 
 async function refresh() {
   try {
@@ -281,6 +292,22 @@ async function refresh() {
 
     const container = document.getElementById('pools-container');
     container.innerHTML = data.pools.map(renderPool).join('');
+
+    // Update price with CoinGecko reference
+    data.pools.forEach(function(pool) {
+      const el = document.getElementById('pool-price-' + pool.id);
+      if (!el || pool.currentTick === undefined) return;
+      const rawPrice = tickToPrice(pool.currentTick);
+      const poolPrice = formatPrice(rawPrice);
+      const label = rawPrice < 0.01 ? pool.token0Symbol + '/' + pool.token1Symbol : pool.token1Symbol + '/' + pool.token0Symbol;
+      let html = poolPrice + ' ' + label;
+      if (refPrice && rawPrice < 0.01) {
+        const impliedUsd = (1 / rawPrice) > 1000 ? '$' + formatNumber((refPrice / (1/rawPrice)).toFixed(2)) : '';
+        html += '<div style="font-size:0.7rem;color:#888;margin-top:2px">CoinGecko BTC: $' + formatNumber(refPrice.toFixed(0)) + '</div>';
+        html += '<div style="font-size:0.7rem;color:#888">1 ' + pool.token0Symbol + ' = ' + impliedUsd + '</div>';
+      }
+      el.innerHTML = html;
+    });
   } catch (e) {
     document.getElementById('loading').textContent = 'Failed to load: ' + e.message;
   }
