@@ -1,4 +1,5 @@
-import { Contract, Wallet, BigNumber } from 'ethers';
+import { Contract, Wallet, BigNumber, ContractTransaction } from 'ethers';
+import { NonceTracker } from './nonce-tracker';
 
 const ERC20_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
@@ -61,10 +62,17 @@ export async function ensureApproval(
   spender: string,
   owner: string,
   amount: BigNumber,
+  nonceTracker?: NonceTracker,
 ): Promise<void> {
   const allowance: BigNumber = await tokenContract.allowance(owner, spender);
   if (allowance.lt(amount)) {
-    const tx = await tokenContract.approve(spender, BigNumber.from(2).pow(256).sub(1));
+    const nonceOverride = nonceTracker ? { nonce: nonceTracker.getNextNonce() } : {};
+    const tx: ContractTransaction = await tokenContract.approve(
+      spender,
+      BigNumber.from(2).pow(256).sub(1),
+      nonceOverride,
+    );
     await tx.wait();
+    nonceTracker?.confirmNonce();
   }
 }

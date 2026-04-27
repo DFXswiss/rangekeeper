@@ -1,10 +1,14 @@
 import { readFileSync } from 'fs';
 import { parse } from 'yaml';
 import { z } from 'zod';
+import { ethers } from 'ethers';
 import path from 'path';
 
 const tokenSchema = z.object({
-  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  address: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase())),
   symbol: z.string().min(1),
   decimals: z.number().int().min(0).max(18),
 });
@@ -19,11 +23,20 @@ const chainSchema = z.object({
 const poolSchema = z.object({
   token0: tokenSchema,
   token1: tokenSchema,
-  feeTier: z.number().int().refine((v) => [100, 500, 3000, 10000].includes(v), {
-    message: 'feeTier must be one of: 100, 500, 3000, 10000',
-  }),
-  nftManagerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-  swapRouterAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  feeTier: z
+    .number()
+    .int()
+    .refine((v) => [100, 500, 3000, 10000].includes(v), {
+      message: 'feeTier must be one of: 100, 500, 3000, 10000',
+    }),
+  nftManagerAddress: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase())),
+  swapRouterAddress: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .transform((addr) => ethers.utils.getAddress(addr.toLowerCase())),
 });
 
 const strategySchema = z.object({
@@ -85,9 +98,7 @@ function deepResolveEnvVars(obj: unknown, parentKey?: string): unknown {
     return result === UNRESOLVED ? undefined : result;
   }
   if (Array.isArray(obj)) {
-    return obj
-      .map((item) => deepResolveEnvVars(item, parentKey))
-      .filter((item) => item !== undefined);
+    return obj.map((item) => deepResolveEnvVars(item, parentKey)).filter((item) => item !== undefined);
   }
   if (obj !== null && typeof obj === 'object') {
     const result: Record<string, unknown> = {};
@@ -107,11 +118,27 @@ export function loadPoolConfigs(configPath?: string): PoolEntry[] {
 
   const result = poolsFileSchema.safeParse(resolved);
   if (!result.success) {
-    const formatted = result.error.issues
-      .map((i) => `  ${i.path.join('.')}: ${i.message}`)
-      .join('\n');
+    const formatted = result.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Pool config validation failed:\n${formatted}`);
   }
 
-  return result.data.pools;
+  const pools = result.data.pools;
+
+  const ids = pools.map((p) => p.id);
+  const duplicates = ids.filter((id, i) => ids.indexOf(id) !== i);
+  if (duplicates.length > 0) {
+    throw new Error(`Duplicate pool IDs found: ${[...new Set(duplicates)].join(', ')}`);
+  }
+
+  for (const p of pools) {
+    if (p.pool.token0.address.toLowerCase() >= p.pool.token1.address.toLowerCase()) {
+      throw new Error(
+        `Pool "${p.id}": token0 address must be less than token1 address (Uniswap V3 requirement). ` +
+          `Got token0=${p.pool.token0.address} (${p.pool.token0.symbol}), token1=${p.pool.token1.address} (${p.pool.token1.symbol}). ` +
+          `Swap them in pools.yaml.`,
+      );
+    }
+  }
+
+  return pools;
 }

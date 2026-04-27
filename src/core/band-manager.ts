@@ -44,7 +44,7 @@ export class BandManager {
     // Safe zone: middle bands (index 2, 3, 4 for 7 bands)
     const count = this.bands.length;
     const safeStart = Math.floor(count / 2) - 1; // 2
-    const safeEnd = Math.floor(count / 2) + 1;   // 4
+    const safeEnd = Math.floor(count / 2) + 1; // 4
     return idx >= safeStart && idx <= safeEnd;
   }
 
@@ -91,7 +91,9 @@ export class BandManager {
   removeBand(tokenId: BigNumber): void {
     this.bands = this.bands.filter((b) => !b.tokenId.eq(tokenId));
     // Re-index
-    this.bands.forEach((b, i) => { b.index = i; });
+    this.bands.forEach((b, i) => {
+      b.index = i;
+    });
   }
 
   addBand(band: Omit<Band, 'index'>, position: 'start' | 'end'): void {
@@ -101,7 +103,9 @@ export class BandManager {
       this.bands.push({ ...band, index: this.bands.length });
     }
     // Re-index
-    this.bands.forEach((b, i) => { b.index = i; });
+    this.bands.forEach((b, i) => {
+      b.index = i;
+    });
   }
 
   getOverallRange(): { tickLower: number; tickUpper: number } | undefined {

@@ -1,30 +1,58 @@
 pools:
-  - id: "usdt-zchf-ethereum"
+  - id: 'usdt-zchf-ethereum'
     chain:
-      name: "ethereum"
+      name: 'ethereum'
       chainId: 1
-      rpcUrl: "${ETHEREUM_RPC_URL}"
-      backupRpcUrls:
-        - "${ETHEREUM_BACKUP_RPC_URL}"
+      rpcUrl: '${ETHEREUM_RPC_URL}'
+      backupRpcUrls: []
     pool:
       token0:
-        address: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
-        symbol: "USDT"
-        decimals: 6
-      token1:
-        address: "0xB58906E27d85EFC9DD6f15A0234dF2e2a23e5847"
-        symbol: "ZCHF"
+        address: '0xb58e61C3098d85632Df34EecfB899A1Ed80921cB'
+        symbol: 'ZCHF'
         decimals: 18
+      token1:
+        address: '0xdAC17F958D2ee523a2206206994597C13D831ec7'
+        symbol: 'USDT'
+        decimals: 6
       feeTier: 100
-      nftManagerAddress: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
-      swapRouterAddress: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+      nftManagerAddress: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88'
+      swapRouterAddress: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45'
     strategy:
       rangeWidthPercent: 3.0
       rebalanceThresholdPercent: 80
       minRebalanceIntervalMinutes: 30
       maxGasCostUsd: 5.0
       slippageTolerancePercent: 0.5
-      expectedPriceRatio: 1.0        # expected token0/token1 price (for depeg detection)
-      depegThresholdPercent: 5.0      # alert if price deviates more than 5%
+      expectedPriceRatio: 1.27 # ZCHF/USDT price (CHF is stronger than USD)
+      depegThresholdPercent: 10.0 # CHF/USD fluctuates, needs wider threshold
+    monitoring:
+      checkIntervalSeconds: 30
+
+  - id: 'svjusd-wcbtc-citrea'
+    chain:
+      name: 'citrea'
+      chainId: 4114
+      rpcUrl: '${CITREA_RPC_URL}'
+      backupRpcUrls: []
+    pool:
+      token0:
+        address: '0x1b70ae756b1089cc5948e4f8a2ad498df30e897d'
+        symbol: 'svJUSD'
+        decimals: 18
+      token1:
+        address: '0x3100000000000000000000000000000000000006'
+        symbol: 'WCBTC'
+        decimals: 18
+      feeTier: 3000
+      nftManagerAddress: '0x3D3821D358f56395d4053954f98aec0E1F0fa568'
+      swapRouterAddress: '0x565eD3D57fe40f78A46f348C220121AE093c3cF8'
+    strategy:
+      rangeWidthPercent: 3.0
+      rebalanceThresholdPercent: 80
+      minRebalanceIntervalMinutes: 30
+      maxGasCostUsd: 5.0
+      slippageTolerancePercent: 0.5
+      expectedPriceRatio: 1.0
+      depegThresholdPercent: 5.0
     monitoring:
       checkIntervalSeconds: 30

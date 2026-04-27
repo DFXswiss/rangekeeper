@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ path: '/app/data/.env' }); // Azure File Share
+dotenv.config(); // Fallback: .env in project root (local dev)
 
 const envSchema = z.object({
   PRIVATE_KEY: z.string().startsWith('0x').min(66),
@@ -28,9 +29,7 @@ export function loadEnvConfig(): EnvConfig {
 
   const result = envSchema.safeParse(process.env);
   if (!result.success) {
-    const formatted = result.error.issues
-      .map((i) => `  ${i.path.join('.')}: ${i.message}`)
-      .join('\n');
+    const formatted = result.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Environment validation failed:\n${formatted}`);
   }
 

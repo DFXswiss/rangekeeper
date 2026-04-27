@@ -31,7 +31,7 @@ function buildContext() {
     id: 'USDT-ZCHF-100',
     chain: { name: 'ethereum', chainId: 1, rpcUrl: 'http://localhost:8545', backupRpcUrls: [] },
     pool: {
-      token0: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 6 },
+      token0: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 18 },
       token1: { address: '0xB58E61C3098d85632Df34EecfB899A1Ed80921cB', symbol: 'ZCHF', decimals: 18 },
       feeTier: 100,
       nftManagerAddress: '0xNFT',
@@ -90,7 +90,12 @@ function buildContext() {
   const ctx = {
     poolEntry,
     wallet,
-    poolMonitor: { fetchPoolState: mocks.fetchPoolState, startMonitoring: jest.fn(), stopMonitoring: jest.fn(), on: jest.fn() },
+    poolMonitor: {
+      fetchPoolState: mocks.fetchPoolState,
+      startMonitoring: jest.fn(),
+      stopMonitoring: jest.fn(),
+      on: jest.fn(),
+    },
     positionManager: {
       approveTokens: jest.fn().mockResolvedValue(undefined),
       mint: mocks.mint,
@@ -102,9 +107,19 @@ function buildContext() {
     emergencyStop: new EmergencyStop(),
     slippageGuard: new SlippageGuard(0.5),
     ilTracker: new ILTracker(),
-    balanceTracker: { setInitialValue: jest.fn(), getInitialValue: jest.fn().mockReturnValue(undefined), getLossPercent: jest.fn() },
+    balanceTracker: {
+      setInitialValue: jest.fn(),
+      getInitialValue: jest.fn().mockReturnValue(undefined),
+      getLossPercent: jest.fn(),
+    },
     gasOracle: { getGasInfo: mocks.getGasInfo, isGasSpike: mocks.isGasSpike },
-    stateStore: { getPoolState: jest.fn().mockReturnValue(undefined), updatePoolState: jest.fn(), save: jest.fn(), saveOrThrow: jest.fn(), getState: jest.fn() },
+    stateStore: {
+      getPoolState: jest.fn().mockReturnValue(undefined),
+      updatePoolState: jest.fn(),
+      save: jest.fn(),
+      saveOrThrow: jest.fn(),
+      getState: jest.fn(),
+    },
     historyLogger: { log: jest.fn() },
     notifier: { notify: mocks.notify },
     maxTotalLossPercent: 10,

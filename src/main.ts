@@ -24,6 +24,7 @@ import { NonceTracker } from './chain/nonce-tracker';
 import { startHealthServer, setDryRunMode } from './health/health-server';
 
 const engines: RebalanceEngine[] = [];
+let stateStoreRef: StateStore | undefined;
 
 async function main(): Promise<void> {
   const env = loadEnvConfig();
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
   // Persistence
   const dataDir = path.resolve(process.cwd(), 'data');
   const stateStore = new StateStore(path.join(dataDir, 'state.json'));
+  stateStoreRef = stateStore;
   const historyLogger = new HistoryLogger(path.join(dataDir, 'history.jsonl'));
 
   // Load pool configs
@@ -66,10 +68,7 @@ async function main(): Promise<void> {
   for (const poolEntry of pools) {
     try {
       // Create failover provider with backup RPCs
-      const failoverProvider = createFailoverProvider(
-        poolEntry.chain.rpcUrl,
-        poolEntry.chain.backupRpcUrls ?? [],
-      );
+      const failoverProvider = createFailoverProvider(poolEntry.chain.rpcUrl, poolEntry.chain.backupRpcUrls ?? []);
 
       const provider = failoverProvider.getProvider();
       let wallet = getWallet(env.PRIVATE_KEY, provider);
@@ -87,7 +86,9 @@ async function main(): Promise<void> {
       );
 
       if (poolAddress === '0x0000000000000000000000000000000000000000') {
-        throw new Error(`Pool not found for ${poolEntry.pool.token0.symbol}/${poolEntry.pool.token1.symbol} fee=${poolEntry.pool.feeTier}`);
+        throw new Error(
+          `Pool not found for ${poolEntry.pool.token0.symbol}/${poolEntry.pool.token1.symbol} fee=${poolEntry.pool.feeTier}`,
+        );
       }
 
       logger.info({ poolId: poolEntry.id, poolAddress }, 'Pool resolved');
@@ -112,7 +113,10 @@ async function main(): Promise<void> {
       // Register failover callback to rebuild contracts with new provider
       // Defers if a rebalance is in progress to avoid mixed-provider state
       failoverProvider.setFailoverCallback((fromUrl, toUrl, newProvider) => {
+        let failoverApplied = false;
         const applyFailover = () => {
+          if (failoverApplied) return;
+          failoverApplied = true;
           logger.warn({ poolId: poolEntry.id, from: fromUrl, to: toUrl }, 'RPC failover: reconnecting contracts');
           wallet = getWallet(env.PRIVATE_KEY, newProvider);
           poolContract = getPoolContract(poolAddress, wallet);
@@ -121,15 +125,15 @@ async function main(): Promise<void> {
           nonceTracker?.syncOnFailover().catch((err) => {
             logger.error({ poolId: poolEntry.id, err }, 'Failed to sync nonce on failover');
           });
-          notifier.notify(
-            `ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`,
-          ).catch(() => {});
+          notifier
+            .notify(`ALERT: RPC failover for ${poolEntry.id}\nSwitched from ${fromUrl} to ${toUrl}`)
+            .catch(() => {});
         };
 
         if (engine.isRebalancing()) {
           logger.warn({ poolId: poolEntry.id }, 'RPC failover deferred: rebalance in progress');
           const deferInterval = setInterval(() => {
-            if (!engine.isRebalancing()) {
+            if (!engine.isRebalancing() && !failoverApplied) {
               clearInterval(deferInterval);
               applyFailover();
             }
@@ -137,10 +141,12 @@ async function main(): Promise<void> {
           // Safety: don't defer forever (30s max)
           setTimeout(() => {
             clearInterval(deferInterval);
-            if (engine.isRebalancing()) {
-              logger.error({ poolId: poolEntry.id }, 'RPC failover forced after 30s defer timeout');
+            if (!failoverApplied) {
+              if (engine.isRebalancing()) {
+                logger.error({ poolId: poolEntry.id }, 'RPC failover forced after 30s defer timeout');
+              }
+              applyFailover();
             }
-            applyFailover();
           }, 30_000);
         } else {
           applyFailover();
@@ -171,7 +177,12 @@ async function main(): Promise<void> {
       await engine.initialize();
 
       // Wire up events
-      poolMonitor.on('priceUpdate', (state) => engine.onPriceUpdate(state));
+      poolMonitor.on('priceUpdate', (state) => {
+        failoverProvider.recordSuccess();
+        engine.onPriceUpdate(state).catch((err) => {
+          logger.error({ poolId: poolEntry.id, err }, 'Unhandled error in onPriceUpdate');
+        });
+      });
       poolMonitor.on('error', (err) => {
         logger.error({ poolId: poolEntry.id, err }, 'Pool monitor error');
         failoverProvider.recordError();
@@ -186,7 +197,9 @@ async function main(): Promise<void> {
     }
   }
 
-  await notifier.notify(`RangeKeeper started with ${engines.length} pool(s)`);
+  await notifier.notify(`RangeKeeper started with ${engines.length} pool(s)`).catch((err) => {
+    logger.warn({ err }, 'Failed to send startup notification');
+  });
 
   logger.info({ activeEngines: engines.length }, 'RangeKeeper is running');
 }
@@ -202,7 +215,8 @@ function setupShutdownHandlers(): void {
       await engine.stop();
     }
 
-    logger.info('All engines stopped, exiting');
+    stateStoreRef?.save();
+    logger.info('All engines stopped, state persisted, exiting');
     process.exit(0);
   };
 

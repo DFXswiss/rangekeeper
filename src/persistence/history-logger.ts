@@ -1,6 +1,8 @@
-import { appendFileSync, existsSync, mkdirSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from 'fs';
 import path from 'path';
 import { getLogger } from '../util/logger';
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 export enum OperationType {
   MINT = 'MINT',
@@ -43,10 +45,25 @@ export class HistoryLogger {
     };
 
     try {
+      this.rotateIfNeeded();
       appendFileSync(this.filePath, JSON.stringify(record) + '\n', 'utf-8');
       this.logger.debug({ type: entry.type, poolId: entry.poolId }, 'History entry logged');
     } catch (err) {
       this.logger.error({ err }, 'Failed to write history log');
+    }
+  }
+
+  private rotateIfNeeded(): void {
+    try {
+      if (!existsSync(this.filePath)) return;
+      const stats = statSync(this.filePath);
+      if (stats.size > MAX_FILE_SIZE) {
+        const rotatedPath = this.filePath + '.1';
+        renameSync(this.filePath, rotatedPath);
+        this.logger.info({ rotatedPath, sizeMb: (stats.size / 1024 / 1024).toFixed(1) }, 'History log rotated');
+      }
+    } catch (err) {
+      this.logger.warn({ err }, 'Failed to rotate history log');
     }
   }
 }

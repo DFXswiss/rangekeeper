@@ -12,10 +12,11 @@ export class NonceTracker {
 
   async initialize(persistedNonce?: number): Promise<void> {
     const onChainNonce = await this.getProvider().getTransactionCount(this.walletAddress, 'latest');
-    this.currentNonce = persistedNonce !== undefined
-      ? Math.max(persistedNonce, onChainNonce)
-      : onChainNonce;
-    this.logger.info({ walletAddress: this.walletAddress, nonce: this.currentNonce, persistedNonce, onChainNonce }, 'Nonce tracker initialized');
+    this.currentNonce = persistedNonce !== undefined ? Math.max(persistedNonce, onChainNonce) : onChainNonce;
+    this.logger.info(
+      { walletAddress: this.walletAddress, nonce: this.currentNonce, persistedNonce, onChainNonce },
+      'Nonce tracker initialized',
+    );
   }
 
   getNextNonce(): number {
@@ -39,6 +40,9 @@ export class NonceTracker {
   async syncOnFailover(): Promise<void> {
     const onChainNonce = await this.getProvider().getTransactionCount(this.walletAddress, 'latest');
     this.currentNonce = Math.max(this.currentNonce ?? 0, onChainNonce);
-    this.logger.info({ walletAddress: this.walletAddress, nonce: this.currentNonce, onChainNonce }, 'Nonce synced on failover');
+    this.logger.info(
+      { walletAddress: this.walletAddress, nonce: this.currentNonce, onChainNonce },
+      'Nonce synced on failover',
+    );
   }
 }

@@ -13,14 +13,14 @@ export const SWAP_ROUTER_ADDRESS = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45';
 export const WALLET_ADDRESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 
 // ---- Token decimals ----
-export const USDT_DECIMALS = 6;
+export const USDT_DECIMALS = 18;
 export const ZCHF_DECIMALS = 18;
 
 // ---- BigNumber amounts ----
-export const AMOUNT_100_USDT = BigNumber.from(100_000_000); // 100 * 10^6
+export const AMOUNT_100_USDT = BigNumber.from('100000000000000000000'); // 100 * 10^18
 export const AMOUNT_100_ZCHF = BigNumber.from('100000000000000000000'); // 100 * 10^18
-export const AMOUNT_50_USDT = BigNumber.from(50_000_000);
-export const AMOUNT_50_ZCHF = BigNumber.from('50000000000000000000');
+export const AMOUNT_50_USDT = BigNumber.from('50000000000000000000'); // 50 * 10^18
+export const AMOUNT_50_ZCHF = BigNumber.from('50000000000000000000'); // 50 * 10^18
 
 // ---- Factory functions ----
 
@@ -89,7 +89,7 @@ export function createRemoveResult(): RemoveResult {
   return {
     amount0: AMOUNT_100_USDT,
     amount1: AMOUNT_100_ZCHF,
-    fee0: BigNumber.from(1_000_000), // 1 USDT fee
+    fee0: BigNumber.from('1000000000000000000'), // 1 USDT fee (18 decimals)
     fee1: BigNumber.from('1000000000000000000'), // 1 ZCHF fee
     txHashes: {
       decreaseLiquidity: '0xmock-decrease-hash',
@@ -99,11 +99,7 @@ export function createRemoveResult(): RemoveResult {
   };
 }
 
-export function createPositionInfo(
-  tokenId: number,
-  tickLower: number,
-  tickUpper: number,
-): PositionInfo {
+export function createPositionInfo(tokenId: number, tickLower: number, tickUpper: number): PositionInfo {
   return {
     tokenId: BigNumber.from(tokenId),
     token0: USDT_ADDRESS,

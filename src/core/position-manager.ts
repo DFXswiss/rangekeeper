@@ -72,18 +72,21 @@ export class PositionManager {
     const token0 = getErc20Contract(token0Address, w);
     const token1 = getErc20Contract(token1Address, w);
 
-    await Promise.all([
-      ensureApproval(token0, this.nftManagerAddress, w.address, constants.MaxUint256),
-      ensureApproval(token1, this.nftManagerAddress, w.address, constants.MaxUint256),
-    ]);
+    // Run approvals sequentially when using NonceTracker to avoid nonce conflicts
+    if (this.nonceTracker) {
+      await ensureApproval(token0, this.nftManagerAddress, w.address, constants.MaxUint256, this.nonceTracker);
+      await ensureApproval(token1, this.nftManagerAddress, w.address, constants.MaxUint256, this.nonceTracker);
+    } else {
+      await Promise.all([
+        ensureApproval(token0, this.nftManagerAddress, w.address, constants.MaxUint256),
+        ensureApproval(token1, this.nftManagerAddress, w.address, constants.MaxUint256),
+      ]);
+    }
 
     this.logger.info('Token approvals confirmed for NFT Manager');
   }
 
   async mint(params: MintParams): Promise<MintResult> {
-    const slippageMul = 1 - params.slippagePercent / 100;
-    const amount0Min = params.amount0Desired.mul(Math.floor(slippageMul * 10000)).div(10000);
-    const amount1Min = params.amount1Desired.mul(Math.floor(slippageMul * 10000)).div(10000);
     const deadline = Math.floor(Date.now() / 1000) + 300; // 5 min
 
     this.logger.info(
@@ -97,34 +100,61 @@ export class PositionManager {
     );
 
     const nftManager = this.nftManager;
+
+    // Simulate mint to get actual expected amounts (handles out-of-range bands correctly)
+    const simulated = await nftManager.callStatic.mint({
+      token0: params.token0,
+      token1: params.token1,
+      fee: params.fee,
+      tickLower: params.tickLower,
+      tickUpper: params.tickUpper,
+      amount0Desired: params.amount0Desired,
+      amount1Desired: params.amount1Desired,
+      amount0Min: 0,
+      amount1Min: 0,
+      recipient: params.recipient,
+      deadline,
+    });
+
+    // Apply slippage to simulated amounts (not desired amounts)
+    const slippageMul = Math.floor((1 - params.slippagePercent / 100) * 10000);
+    const amount0Min = BigNumber.from(simulated.amount0).mul(slippageMul).div(10000);
+    const amount1Min = BigNumber.from(simulated.amount1).mul(slippageMul).div(10000);
+
     const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
       () =>
-        nftManager.mint({
-          token0: params.token0,
-          token1: params.token1,
-          fee: params.fee,
-          tickLower: params.tickLower,
-          tickUpper: params.tickUpper,
-          amount0Desired: params.amount0Desired,
-          amount1Desired: params.amount1Desired,
-          amount0Min,
-          amount1Min,
-          recipient: params.recipient,
-          deadline,
-        }, nonceOverride),
+        nftManager.mint(
+          {
+            token0: params.token0,
+            token1: params.token1,
+            fee: params.fee,
+            tickLower: params.tickLower,
+            tickUpper: params.tickUpper,
+            amount0Desired: params.amount0Desired,
+            amount1Desired: params.amount1Desired,
+            amount0Min,
+            amount1Min,
+            recipient: params.recipient,
+            deadline,
+          },
+          nonceOverride,
+        ),
       'mint',
     );
 
     const receipt = await tx.wait();
+    this.nonceTracker?.confirmNonce();
     if (receipt.status === 0) {
       throw new Error('Mint transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
 
     const event = receipt.events?.find((e: { event?: string }) => e.event === 'IncreaseLiquidity');
     if (!event?.args) {
-      this.logger.error({ txHash: receipt.transactionHash, logs: receipt.logs?.length }, 'IncreaseLiquidity event not found in mint receipt');
+      this.logger.error(
+        { txHash: receipt.transactionHash, logs: receipt.logs?.length },
+        'IncreaseLiquidity event not found in mint receipt',
+      );
       throw new Error(`Mint succeeded but IncreaseLiquidity event not found (tx: ${receipt.transactionHash})`);
     }
 
@@ -153,7 +183,10 @@ export class PositionManager {
     const w = this.wallet;
     const nftManager = this.nftManager;
 
-    this.logger.info({ tokenId: tokenId.toString(), liquidity: liquidity.toString(), slippagePercent }, 'Removing position');
+    this.logger.info(
+      { tokenId: tokenId.toString(), liquidity: liquidity.toString(), slippagePercent },
+      'Removing position',
+    );
 
     // Query expected amounts to calculate slippage-protected minimums
     const amounts = await nftManager.callStatic.decreaseLiquidity({
@@ -171,20 +204,23 @@ export class PositionManager {
     const decreaseNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const decreaseTx: ContractTransaction = await withRetry(
       () =>
-        nftManager.decreaseLiquidity({
-          tokenId,
-          liquidity,
-          amount0Min,
-          amount1Min,
-          deadline,
-        }, decreaseNonce),
+        nftManager.decreaseLiquidity(
+          {
+            tokenId,
+            liquidity,
+            amount0Min,
+            amount1Min,
+            deadline,
+          },
+          decreaseNonce,
+        ),
       'decreaseLiquidity',
     );
     const decreaseReceipt = await decreaseTx.wait();
+    this.nonceTracker?.confirmNonce();
     if (decreaseReceipt.status === 0) {
       throw new Error('decreaseLiquidity transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
     const decreaseEvent = decreaseReceipt.events?.find((e: { event?: string }) => e.event === 'DecreaseLiquidity');
     if (!decreaseEvent?.args) {
       this.logger.error({ txHash: decreaseReceipt.transactionHash }, 'DecreaseLiquidity event not found');
@@ -192,23 +228,37 @@ export class PositionManager {
     }
 
     // Step 2: Collect all tokens (including fees)
+    // Use higher retry count since tokens are stuck in NFT manager if collect fails after decreaseLiquidity
     const maxUint128 = BigNumber.from(2).pow(128).sub(1);
     const collectNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
-    const collectTx: ContractTransaction = await withRetry(
-      () =>
-        nftManager.collect({
-          tokenId,
-          recipient: w.address,
-          amount0Max: maxUint128,
-          amount1Max: maxUint128,
-        }, collectNonce),
-      'collect',
-    );
-    const collectReceipt = await collectTx.wait();
-    if (collectReceipt.status === 0) {
-      throw new Error('collect transaction reverted on-chain');
+    let collectReceipt;
+    try {
+      const collectTx: ContractTransaction = await withRetry(
+        () =>
+          nftManager.collect(
+            {
+              tokenId,
+              recipient: w.address,
+              amount0Max: maxUint128,
+              amount1Max: maxUint128,
+            },
+            collectNonce,
+          ),
+        'collect',
+        { maxRetries: 5, baseDelayMs: 2000, maxDelayMs: 30000 },
+      );
+      collectReceipt = await collectTx.wait();
+      this.nonceTracker?.confirmNonce();
+      if (collectReceipt.status === 0) {
+        throw new Error('collect transaction reverted on-chain');
+      }
+    } catch (collectErr) {
+      this.logger.error(
+        { tokenId: tokenId.toString(), err: collectErr },
+        'CRITICAL: collect failed after decreaseLiquidity — tokens may be stuck in NFT manager. Manual collect required.',
+      );
+      throw collectErr;
     }
-    this.nonceTracker?.confirmNonce();
     const collectEvent = collectReceipt.events?.find((e: { event?: string }) => e.event === 'Collect');
     if (!collectEvent?.args) {
       this.logger.error({ txHash: collectReceipt.transactionHash }, 'Collect event not found');
@@ -224,10 +274,10 @@ export class PositionManager {
     const burnNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const burnTx: ContractTransaction = await withRetry(() => nftManager.burn(tokenId, burnNonce), 'burn');
     const burnReceipt = await burnTx.wait();
+    this.nonceTracker?.confirmNonce();
     if (burnReceipt.status === 0) {
       throw new Error('burn transaction reverted on-chain');
     }
-    this.nonceTracker?.confirmNonce();
 
     const result: RemoveResult = {
       amount0: principalAmount0,

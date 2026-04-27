@@ -8,9 +8,12 @@ export interface GasInfo {
   isEip1559: boolean;
 }
 
+const RING_BUFFER_SIZE = 20;
+
 export class GasOracle {
   private readonly logger = getLogger();
   private baselineGasPrice: number | undefined;
+  private readonly gasPriceBuffer: number[] = [];
 
   async getGasInfo(provider: providers.JsonRpcProvider): Promise<GasInfo> {
     try {
@@ -41,11 +44,15 @@ export class GasOracle {
   }
 
   private updateBaseline(currentGwei: number): void {
-    if (!this.baselineGasPrice) {
-      this.baselineGasPrice = currentGwei;
-    } else {
-      this.baselineGasPrice = this.baselineGasPrice * 0.95 + currentGwei * 0.05;
+    this.gasPriceBuffer.push(currentGwei);
+    if (this.gasPriceBuffer.length > RING_BUFFER_SIZE) {
+      this.gasPriceBuffer.shift();
     }
+
+    // Use median of the ring buffer as baseline
+    const sorted = [...this.gasPriceBuffer].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    this.baselineGasPrice = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
   }
 
   isGasSpike(currentGwei: number, multiplier = 10): boolean {

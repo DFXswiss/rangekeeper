@@ -1,6 +1,13 @@
 import { BigNumber } from 'ethers';
 import { getLogger } from '../util/logger';
-import { PositionManager, MintParams, MintResult, RemoveResult, PositionInfo, WalletProvider } from './position-manager';
+import {
+  PositionManager,
+  MintParams,
+  MintResult,
+  RemoveResult,
+  PositionInfo,
+  WalletProvider,
+} from './position-manager';
 
 interface VirtualPosition {
   tokenId: BigNumber;
@@ -74,10 +81,7 @@ export class DryRunPositionManager extends PositionManager {
     if (virtualPos) {
       this.virtualPositions.delete(key);
 
-      this.dryLogger.info(
-        { tokenId: key },
-        '[DRY RUN] Virtual position removed',
-      );
+      this.dryLogger.info({ tokenId: key }, '[DRY RUN] Virtual position removed');
 
       return {
         amount0: virtualPos.amount0,
@@ -93,10 +97,7 @@ export class DryRunPositionManager extends PositionManager {
     }
 
     // On-chain position — simulate removal by reading its state
-    this.dryLogger.info(
-      { tokenId: key },
-      '[DRY RUN] Simulating removal of on-chain position',
-    );
+    this.dryLogger.info({ tokenId: key }, '[DRY RUN] Simulating removal of on-chain position');
 
     const pos = await super.getPosition(tokenId);
     return {

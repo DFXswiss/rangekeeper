@@ -32,7 +32,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     id: 'USDT-ZCHF-100',
     chain: { name: 'ethereum', chainId: 1, rpcUrl: 'http://localhost:8545', backupRpcUrls: [] },
     pool: {
-      token0: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 6 },
+      token0: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 18 },
       token1: { address: '0xB58E61C3098d85632Df34EecfB899A1Ed80921cB', symbol: 'ZCHF', decimals: 18 },
       feeTier: 100,
       nftManagerAddress: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
@@ -73,7 +73,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     removePosition: jest.fn().mockResolvedValue({
       amount0: AMOUNT_100_USDT,
       amount1: AMOUNT_100_ZCHF,
-      fee0: BigNumber.from(1_000_000),
+      fee0: BigNumber.from('1000000000000000000'),
       fee1: BigNumber.from('1000000000000000000'),
       txHashes: { decreaseLiquidity: '0xmock-decrease-hash', collect: '0xmock-collect-hash', burn: '0xmock-burn-hash' },
     }),
@@ -85,7 +85,7 @@ function buildContext(overrides: Record<string, any> = {}) {
     }),
     findExistingPositions: jest.fn().mockResolvedValue([]),
     approveTokensSE: jest.fn().mockResolvedValue(undefined),
-    executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from(50_000_000), txHash: '0xmock-swap-hash' }),
+    executeSwap: jest.fn().mockResolvedValue({ amountOut: BigNumber.from('50000000000000000000'), txHash: '0xmock-swap-hash' }),
     setInitialValue: jest.fn(),
     getInitialValue: jest.fn().mockReturnValue(undefined),
     getLossPercent: jest.fn(),
@@ -209,6 +209,25 @@ describe('Rebalance Lifecycle Integration', () => {
 
   it('initialize() finds on-chain positions and sets bands from chain', async () => {
     const { ctx, mocks } = buildContext();
+    mocks.findExistingPositions.mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({
+        tokenId: BigNumber.from(789 + i),
+        tickLower: -100 + i * 40,
+        tickUpper: -60 + i * 40,
+        liquidity: BigNumber.from('5000000'),
+      })),
+    );
+
+    const engine = new RebalanceEngine(ctx);
+    await engine.initialize();
+
+    expect(engine.getState()).toBe('MONITORING');
+    expect(engine.getBands()).toHaveLength(5);
+    expect(engine.getBands()[0].tokenId.eq(789)).toBe(true);
+  });
+
+  it('initialize() stops engine when on-chain positions are below minimum band count', async () => {
+    const { ctx, mocks } = buildContext();
     mocks.findExistingPositions.mockResolvedValue([
       {
         tokenId: BigNumber.from(789),
@@ -221,9 +240,8 @@ describe('Rebalance Lifecycle Integration', () => {
     const engine = new RebalanceEngine(ctx);
     await engine.initialize();
 
-    expect(engine.getState()).toBe('MONITORING');
-    expect(engine.getBands()).toHaveLength(1);
-    expect(engine.getBands()[0].tokenId.eq(789)).toBe(true);
+    expect(engine.getState()).toBe('STOPPED');
+    expect(mocks.notify).toHaveBeenCalledWith(expect.stringContaining('CRITICAL'));
   });
 
   it('onPriceUpdate with no bands mints initial 7 bands', async () => {

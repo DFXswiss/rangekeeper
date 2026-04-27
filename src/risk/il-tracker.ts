@@ -24,19 +24,32 @@ export class ILTracker {
     this.logger.info({ token0Amount, token1Amount, price }, 'IL tracker entry set');
   }
 
-  calculate(currentToken0: number, currentToken1: number, currentPrice: number): ILSnapshot | null {
+  calculate(
+    currentToken0: number,
+    currentToken1: number,
+    currentPrice: number,
+    priceIsToken0InToken1 = true,
+  ): ILSnapshot | null {
     if (!this.entryToken0Amount || !this.entryToken1Amount || !this.entryPrice) {
       return null;
     }
 
     // Hold value: what the original tokens would be worth now
-    const holdValueUsd = this.entryToken0Amount * currentPrice + this.entryToken1Amount;
+    // priceIsToken0InToken1=true: price = token0 per token1 → value = token0 * price + token1
+    // priceIsToken0InToken1=false: price = token1 per token0 → value = token0 + token1 * price
+    let holdValueUsd: number;
+    let positionValueUsd: number;
 
-    // Position value: current token amounts at current price
-    const positionValueUsd = currentToken0 * currentPrice + currentToken1;
+    if (priceIsToken0InToken1) {
+      holdValueUsd = this.entryToken0Amount * currentPrice + this.entryToken1Amount;
+      positionValueUsd = currentToken0 * currentPrice + currentToken1;
+    } else {
+      holdValueUsd = this.entryToken0Amount + this.entryToken1Amount * currentPrice;
+      positionValueUsd = currentToken0 + currentToken1 * currentPrice;
+    }
 
     // IL = (positionValue / holdValue - 1) * 100
-    const ilPercent = holdValueUsd > 0 ? ((positionValueUsd / holdValueUsd) - 1) * 100 : 0;
+    const ilPercent = holdValueUsd > 0 ? (positionValueUsd / holdValueUsd - 1) * 100 : 0;
 
     const snapshot: ILSnapshot = {
       timestamp: Date.now(),
