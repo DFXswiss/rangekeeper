@@ -105,12 +105,11 @@ function getDashboardHtml(): string {
   .warn { color: #fbbf24; }
   .error { color: #f87171; }
   .muted { color: #666; }
-  .band-bar { display: flex; margin: 8px 0; border-radius: 4px; overflow: hidden; height: 32px; }
-  .band-bar .band { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 600; border-right: 1px solid #0a0a0a; }
-  .band-bar .buffer { background: #1e293b; color: #64748b; }
-  .band-bar .trigger { background: #312e81; color: #818cf8; }
-  .band-bar .safe { background: #14532d; color: #4ade80; }
-  .band-bar .active { outline: 2px solid #fff; outline-offset: -2px; }
+  .band-cell { width: 100%; height: 18px; border-radius: 3px; }
+  .band-cell.buffer { background: #1e293b; }
+  .band-cell.trigger { background: #312e81; }
+  .band-cell.safe { background: #14532d; }
+  .band-cell.active { outline: 2px solid #fff; outline-offset: -1px; }
   .links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   .links a { color: #60a5fa; text-decoration: none; font-size: 0.85rem; padding: 4px 10px; background: #1e293b; border-radius: 4px; }
   .links a:hover { background: #2d3a4f; }
@@ -123,8 +122,10 @@ function getDashboardHtml(): string {
 </style>
 </head>
 <body>
-<h1>RangeKeeper</h1>
-<p class="subtitle">Autonomous Uniswap V3 Liquidity Provisioning</p>
+<div style="display:flex;align-items:center;justify-content:space-between">
+<div><h1>RangeKeeper</h1><p class="subtitle">Autonomous Uniswap V3 Liquidity Provisioning</p></div>
+<a href="https://github.com/DFXswiss/rangekeeper" style="color:#888;text-decoration:none" title="GitHub"><svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+</div>
 
 <div id="error-banner"></div>
 <div id="loading">Loading...</div>
@@ -158,6 +159,34 @@ function formatUptime(s) {
   return h + 'h ' + m + 'm';
 }
 
+function tickToPrice(tick) {
+  return Math.pow(1.0001, tick);
+}
+
+function formatNumber(n) {
+  var parts = n.split('.');
+  parts[0] = parts[0].replace(/\\B(?=(\\d{3})+(?!\\d))/g, "'");
+  return parts.join('.');
+}
+
+function formatPrice(price) {
+  if (price < 0.01) {
+    var inv = 1 / price;
+    return formatNumber(inv.toFixed(0));
+  }
+  if (price < 1) return price.toFixed(6);
+  if (price < 1000) return formatNumber(price.toFixed(2));
+  return formatNumber(price.toFixed(0));
+}
+
+function formatPriceLabel(pool) {
+  const tick = pool.currentTick;
+  if (tick === undefined) return '';
+  const raw = tickToPrice(tick);
+  if (raw < 0.01) return pool.token0Symbol + '/' + pool.token1Symbol;
+  return pool.token1Symbol + '/' + pool.token0Symbol;
+}
+
 function explorerUrl(chainId, type, address) {
   if (chainId === 4114) return 'https://citreascan.com/' + type + '/' + address;
   return 'https://etherscan.io/' + type + '/' + address;
@@ -182,33 +211,31 @@ function renderPool(pool) {
   html += '<div class="grid">';
   html += '<div class="metric"><div class="label">Engine State</div><div class="value ' + stateClass + '">' + stateText + '</div></div>';
   html += '<div class="metric"><div class="label">Bands</div><div class="value ' + (bandCount===7?'ok':'warn') + '">' + bandCount + ' / 7</div></div>';
-  html += '<div class="metric"><div class="label">Active Band</div><div class="value">' + (pool.activeBand !== undefined ? pool.activeBand + ' (' + ZONE_LABELS[pool.activeBand] + ')' : '-') + '</div></div>';
-  html += '<div class="metric"><div class="label">Current Tick</div><div class="value">' + (pool.currentTick ?? '-') + '</div></div>';
+  html += '<div class="metric"><div class="label">Active Band</div><div class="value">' + (pool.activeBand !== undefined ? (pool.activeBand + 1) + ' (' + ZONE_LABELS[pool.activeBand] + ')' : '-') + '</div></div>';
+  html += '<div class="metric"><div class="label">Current Price</div><div class="value" id="pool-price-' + pool.id + '">-</div></div>';
   html += '</div>';
 
   if (stopped && pool.emergencyReason) {
     html += '<div style="margin-top:12px;padding:10px;background:#7f1d1d;border-radius:4px;font-size:0.85rem">' + pool.emergencyReason + '</div>';
   }
 
-  // Band visualization
+  // Band table with integrated visualization
   if (bandCount > 0) {
-    html += '<div style="margin-top:16px"><strong style="font-size:0.85rem">Band Layout</strong>';
-    html += '<div class="band-bar">';
-    for (let i = 0; i < bandCount; i++) {
-      const b = pool.bands[i];
-      const isActive = i === pool.activeBand;
-      html += '<div class="band ' + ZONE_CLASSES[i] + (isActive ? ' active' : '') + '" title="[' + b.tickLower + ', ' + b.tickUpper + '] #' + b.tokenId + '">' + i + '</div>';
-    }
-    html += '</div></div>';
-
-    // Band table
-    html += '<table style="margin-top:8px"><thead><tr><th>#</th><th>Zone</th><th>Tick Range</th><th>Token ID</th></tr></thead><tbody>';
-    for (let i = 0; i < bandCount; i++) {
-      const b = pool.bands[i];
-      const isActive = i === pool.activeBand;
+    const priceLabel = formatPriceLabel(pool);
+    html += '<table style="margin-top:16px"><thead><tr><th>Band</th><th>Zone</th><th></th><th>Price Range (' + priceLabel + ')</th><th class="muted">Tick Range</th></tr></thead><tbody>';
+    for (let ri = 0; ri < bandCount; ri++) {
+      const b = pool.bands[ri];
+      const isActive = ri === pool.activeBand;
+      const rawLower = tickToPrice(b.tickLower);
+      const rawUpper = tickToPrice(b.tickUpper);
+      const isInverted = rawLower < 0.01;
+      const priceHigh = isInverted ? formatPrice(rawLower) : formatPrice(rawUpper);
+      const priceLow = isInverted ? formatPrice(rawUpper) : formatPrice(rawLower);
       html += '<tr' + (isActive ? ' style="color:#fff;font-weight:600"' : '') + '>';
-      html += '<td>' + i + '</td><td>' + ZONE_LABELS[i] + '</td><td>[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
-      html += '<td>' + b.tokenId + '</td>';
+      html += '<td>' + (ri + 1) + '</td><td>' + ZONE_LABELS[ri] + '</td>';
+      html += '<td><div class="band-cell ' + ZONE_CLASSES[ri] + (isActive ? ' active' : '') + '"></div></td>';
+      html += '<td>' + priceLow + ' — ' + priceHigh + '</td>';
+      html += '<td class="muted">[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
       html += '</tr>';
     }
     html += '</tbody></table>';
@@ -224,6 +251,17 @@ function renderPool(pool) {
   html += '</div>';
   return html;
 }
+
+let refPrice = null;
+async function fetchRefPrice() {
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+    const data = await res.json();
+    refPrice = data.bitcoin.usd;
+  } catch(e) {}
+}
+fetchRefPrice();
+setInterval(fetchRefPrice, 60000);
 
 async function refresh() {
   try {
@@ -254,6 +292,22 @@ async function refresh() {
 
     const container = document.getElementById('pools-container');
     container.innerHTML = data.pools.map(renderPool).join('');
+
+    // Update price with CoinGecko reference
+    data.pools.forEach(function(pool) {
+      const el = document.getElementById('pool-price-' + pool.id);
+      if (!el || pool.currentTick === undefined) return;
+      const rawPrice = tickToPrice(pool.currentTick);
+      const poolPrice = formatPrice(rawPrice);
+      const label = rawPrice < 0.01 ? pool.token0Symbol + '/' + pool.token1Symbol : pool.token1Symbol + '/' + pool.token0Symbol;
+      let html = poolPrice + ' ' + label;
+      if (refPrice && rawPrice < 0.01) {
+        const impliedUsd = (1 / rawPrice) > 1000 ? '$' + formatNumber((refPrice / (1/rawPrice)).toFixed(2)) : '';
+        html += '<div style="font-size:0.7rem;color:#888;margin-top:2px">CoinGecko BTC: $' + formatNumber(refPrice.toFixed(0)) + '</div>';
+        html += '<div style="font-size:0.7rem;color:#888">1 ' + pool.token0Symbol + ' = ' + impliedUsd + '</div>';
+      }
+      el.innerHTML = html;
+    });
   } catch (e) {
     document.getElementById('loading').textContent = 'Failed to load: ' + e.message;
   }
