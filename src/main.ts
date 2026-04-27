@@ -69,8 +69,12 @@ async function main(): Promise<void> {
   logger.info({ poolCount: pools.length }, 'Loaded pool configurations');
 
   // Load price history seed data if available
-  const seedPath = path.join(dataDir, 'price-history-seed.json');
-  if (existsSync(seedPath)) {
+  const seedPaths = [
+    path.join(dataDir, 'price-history-seed.json'),
+    path.resolve(process.cwd(), 'data-seed', 'price-history-seed.json'),
+  ];
+  const seedPath = seedPaths.find((p) => existsSync(p));
+  if (seedPath) {
     try {
       const seedData = JSON.parse(readFileSync(seedPath, 'utf-8'));
       for (const pool of pools) {
