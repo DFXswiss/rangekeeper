@@ -105,8 +105,8 @@ function getDashboardHtml(): string {
   .warn { color: #fbbf24; }
   .error { color: #f87171; }
   .muted { color: #666; }
-  .band-bar { display: flex; margin: 8px 0; border-radius: 4px; overflow: hidden; height: 32px; }
-  .band-bar .band { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 600; border-right: 1px solid #0a0a0a; }
+  .band-bar { display: flex; flex-direction: column-reverse; margin: 8px 0; border-radius: 4px; overflow: hidden; }
+  .band-bar .band { display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 600; height: 28px; border-bottom: 1px solid #0a0a0a; }
   .band-bar .buffer { background: #1e293b; color: #64748b; }
   .band-bar .trigger { background: #312e81; color: #818cf8; }
   .band-bar .safe { background: #14532d; color: #4ade80; }
@@ -158,6 +158,16 @@ function formatUptime(s) {
   return h + 'h ' + m + 'm';
 }
 
+function tickToPrice(tick) {
+  return Math.pow(1.0001, tick);
+}
+
+function formatPrice(price) {
+  if (price < 0.0001) return price.toExponential(4);
+  if (price < 1) return price.toFixed(8);
+  return price.toFixed(4);
+}
+
 function explorerUrl(chainId, type, address) {
   if (chainId === 4114) return 'https://citreascan.com/' + type + '/' + address;
   return 'https://etherscan.io/' + type + '/' + address;
@@ -183,7 +193,7 @@ function renderPool(pool) {
   html += '<div class="metric"><div class="label">Engine State</div><div class="value ' + stateClass + '">' + stateText + '</div></div>';
   html += '<div class="metric"><div class="label">Bands</div><div class="value ' + (bandCount===7?'ok':'warn') + '">' + bandCount + ' / 7</div></div>';
   html += '<div class="metric"><div class="label">Active Band</div><div class="value">' + (pool.activeBand !== undefined ? pool.activeBand + ' (' + ZONE_LABELS[pool.activeBand] + ')' : '-') + '</div></div>';
-  html += '<div class="metric"><div class="label">Current Tick</div><div class="value">' + (pool.currentTick ?? '-') + '</div></div>';
+  html += '<div class="metric"><div class="label">Current Price</div><div class="value">' + (pool.currentTick !== undefined ? formatPrice(tickToPrice(pool.currentTick)) + ' ' + (pool.token1Symbol||'') + '/' + (pool.token0Symbol||'') : '-') + '</div></div>';
   html += '</div>';
 
   if (stopped && pool.emergencyReason) {
@@ -197,17 +207,21 @@ function renderPool(pool) {
     for (let i = 0; i < bandCount; i++) {
       const b = pool.bands[i];
       const isActive = i === pool.activeBand;
-      html += '<div class="band ' + ZONE_CLASSES[i] + (isActive ? ' active' : '') + '" title="[' + b.tickLower + ', ' + b.tickUpper + '] #' + b.tokenId + '">' + i + '</div>';
+      html += '<div class="band ' + ZONE_CLASSES[i] + (isActive ? ' active' : '') + '" title="[' + b.tickLower + ', ' + b.tickUpper + '] #' + b.tokenId + '">' + (i + 1) + '</div>';
     }
     html += '</div></div>';
 
     // Band table
-    html += '<table style="margin-top:8px"><thead><tr><th>#</th><th>Zone</th><th>Tick Range</th><th>Token ID</th></tr></thead><tbody>';
+    html += '<table style="margin-top:8px"><thead><tr><th>#</th><th>Zone</th><th>Price Range (' + (pool.token1Symbol||'') + '/' + (pool.token0Symbol||'') + ')</th><th>Tick Range</th><th>Token ID</th></tr></thead><tbody>';
     for (let i = 0; i < bandCount; i++) {
       const b = pool.bands[i];
       const isActive = i === pool.activeBand;
+      const priceLower = formatPrice(tickToPrice(b.tickLower));
+      const priceUpper = formatPrice(tickToPrice(b.tickUpper));
       html += '<tr' + (isActive ? ' style="color:#fff;font-weight:600"' : '') + '>';
-      html += '<td>' + i + '</td><td>' + ZONE_LABELS[i] + '</td><td>[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
+      html += '<td>' + (i + 1) + '</td><td>' + ZONE_LABELS[i] + '</td>';
+      html += '<td>' + priceLower + ' — ' + priceUpper + '</td>';
+      html += '<td class="muted">[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
       html += '<td>' + b.tokenId + '</td>';
       html += '</tr>';
     }
