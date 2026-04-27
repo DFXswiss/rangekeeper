@@ -21,6 +21,7 @@ import { TelegramNotifier } from './notification/telegram-notifier';
 import { DiscordNotifier } from './notification/discord-notifier';
 import { GasOracle } from './chain/gas-oracle';
 import { NonceTracker } from './chain/nonce-tracker';
+import { TokenWrapper } from './chain/token-wrapper';
 import { startHealthServer, setDryRunMode } from './health/health-server';
 
 const engines: RebalanceEngine[] = [];
@@ -170,6 +171,18 @@ async function main(): Promise<void> {
         maxTotalLossPercent: env.MAX_TOTAL_LOSS_PERCENT,
         nonceTracker,
       };
+
+      // Wrap tokens (cBTC→WCBTC, JUSD→svJUSD) before engine starts
+      if (poolEntry.wrappers && poolEntry.wrappers.length > 0 && !env.DRY_RUN) {
+        const tokenWrapper = new TokenWrapper(() => wallet, nonceTracker);
+        for (const wrapConfig of poolEntry.wrappers) {
+          try {
+            await tokenWrapper.wrapIfNeeded(wrapConfig);
+          } catch (err) {
+            logger.warn({ poolId: poolEntry.id, wrapper: wrapConfig.wrappedToken, err }, 'Token wrapping failed (continuing)');
+          }
+        }
+      }
 
       const engine = new RebalanceEngine(ctx);
       engines.push(engine);
