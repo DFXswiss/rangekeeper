@@ -208,7 +208,7 @@ function renderPool(pool) {
       const isActive = i === pool.activeBand;
       html += '<tr' + (isActive ? ' style="color:#fff;font-weight:600"' : '') + '>';
       html += '<td>' + i + '</td><td>' + ZONE_LABELS[i] + '</td><td>[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
-      html += '<td><a href="' + explorerUrl(chainId, 'token', pool.bands[0].tokenId ? poolAddr : '') + '" style="color:#60a5fa">' + b.tokenId + '</a></td>';
+      html += '<td>' + b.tokenId + '</td>';
       html += '</tr>';
     }
     html += '</tbody></table>';
