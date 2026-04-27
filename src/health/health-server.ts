@@ -41,8 +41,8 @@ const botStatus: BotStatus = {
 
 const startTime = Date.now();
 
-// Price history ring buffer (24h at 30s intervals = 2880 entries)
-const MAX_HISTORY = 2880;
+// Price history ring buffer (7 days at 30s intervals = ~20160 entries)
+const MAX_HISTORY = 20160;
 const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: number | null }[]> = new Map();
 let cachedRefPrice: number | null = null;
 let lastRefFetch = 0;
@@ -71,6 +71,17 @@ export async function recordPrice(poolId: string, tick: number): Promise<void> {
 
 export function getPriceHistory(poolId: string): { time: number; poolPrice: number; refPrice: number | null }[] {
   return priceHistory.get(poolId) ?? [];
+}
+
+export function importPriceHistory(poolId: string, data: { time: number; poolPrice: number; refPrice: number | null }[]): void {
+  const existing = priceHistory.get(poolId) ?? [];
+  // Prepend imported data, then append existing (live data takes priority)
+  const merged = [...data, ...existing];
+  // Deduplicate by time, keep last
+  const seen = new Map<number, typeof merged[0]>();
+  for (const entry of merged) seen.set(entry.time, entry);
+  const sorted = [...seen.values()].sort((a, b) => a.time - b.time);
+  priceHistory.set(poolId, sorted.slice(-MAX_HISTORY));
 }
 
 export function updatePoolStatus(poolId: string, status: Partial<PoolStatus>): void {
