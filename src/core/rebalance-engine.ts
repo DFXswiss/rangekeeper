@@ -11,7 +11,7 @@ import { BalanceTracker } from './balance-tracker';
 import { StateStore, RebalanceStage, BandState } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
-import { updatePoolStatus } from '../health/health-server';
+import { updatePoolStatus, recordPrice } from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
@@ -253,6 +253,8 @@ export class RebalanceEngine {
     }
 
     const { poolEntry } = this.ctx;
+
+    recordPrice(poolEntry.id, poolState.tick).catch(() => {});
 
     updatePoolStatus(poolEntry.id, {
       state: this.state,

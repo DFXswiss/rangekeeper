@@ -41,6 +41,38 @@ const botStatus: BotStatus = {
 
 const startTime = Date.now();
 
+// Price history ring buffer (24h at 30s intervals = 2880 entries)
+const MAX_HISTORY = 2880;
+const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: number | null }[]> = new Map();
+let cachedRefPrice: number | null = null;
+let lastRefFetch = 0;
+
+async function fetchRefPrice(): Promise<void> {
+  if (Date.now() - lastRefFetch < 60_000) return;
+  lastRefFetch = Date.now();
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+    const data = (await res.json()) as { bitcoin?: { usd?: number } };
+    cachedRefPrice = data.bitcoin?.usd ?? null;
+  } catch {
+    // keep previous value
+  }
+}
+
+export async function recordPrice(poolId: string, tick: number): Promise<void> {
+  await fetchRefPrice();
+  if (!priceHistory.has(poolId)) priceHistory.set(poolId, []);
+  const history = priceHistory.get(poolId)!;
+  const rawPrice = Math.pow(1.0001, tick);
+  const poolPrice = rawPrice < 0.01 ? 1 / rawPrice : rawPrice;
+  history.push({ time: Math.floor(Date.now() / 1000), poolPrice, refPrice: cachedRefPrice });
+  if (history.length > MAX_HISTORY) history.shift();
+}
+
+export function getPriceHistory(poolId: string): { time: number; poolPrice: number; refPrice: number | null }[] {
+  return priceHistory.get(poolId) ?? [];
+}
+
 export function updatePoolStatus(poolId: string, status: Partial<PoolStatus>): void {
   const existing = botStatus.pools.find((p) => p.id === poolId);
   if (existing) {
@@ -74,6 +106,10 @@ export function startHealthServer(port: number): void {
     res.json(getBotStatus());
   });
 
+  app.get('/api/history/:poolId', (req, res) => {
+    res.json(getPriceHistory(req.params.poolId));
+  });
+
   app.get('/dashboard', (_req, res) => {
     res.type('html').send(getDashboardHtml());
   });
@@ -90,6 +126,7 @@ function getDashboardHtml(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RangeKeeper Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 24px; max-width: 960px; margin: 0 auto; }
@@ -143,6 +180,12 @@ function getDashboardHtml(): string {
 
 <div id="pools-container"></div>
 
+</div>
+
+<div class="card" id="chart-card" style="display:none">
+  <h2>Price History</h2>
+  <div id="chart-container" style="height:400px"></div>
+  <div class="muted" style="font-size:0.75rem;margin-top:4px">Blue: BTC/USD (CoinGecko) &middot; Red: Pool price (svJUSD/WCBTC)</div>
 </div>
 
 <div class="refresh-info">Auto-refreshes every 30s</div>
@@ -252,17 +295,6 @@ function renderPool(pool) {
   return html;
 }
 
-let refPrice = null;
-async function fetchRefPrice() {
-  try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
-    const data = await res.json();
-    refPrice = data.bitcoin.usd;
-  } catch(e) {}
-}
-fetchRefPrice();
-setInterval(fetchRefPrice, 60000);
-
 async function refresh() {
   try {
     const res = await fetch('/status');
@@ -293,19 +325,23 @@ async function refresh() {
     const container = document.getElementById('pools-container');
     container.innerHTML = data.pools.map(renderPool).join('');
 
-    // Update price with CoinGecko reference
-    data.pools.forEach(function(pool) {
+    // Update price display from local history (includes refPrice)
+    data.pools.forEach(async function(pool) {
       const el = document.getElementById('pool-price-' + pool.id);
       if (!el || pool.currentTick === undefined) return;
       const rawPrice = tickToPrice(pool.currentTick);
       const poolPrice = formatPrice(rawPrice);
       const label = rawPrice < 0.01 ? pool.token0Symbol + '/' + pool.token1Symbol : pool.token1Symbol + '/' + pool.token0Symbol;
-      let html = poolPrice + ' ' + label;
-      if (refPrice && rawPrice < 0.01) {
-        const impliedUsd = (1 / rawPrice) > 1000 ? '$' + formatNumber((refPrice / (1/rawPrice)).toFixed(2)) : '';
-        html += '<div style="font-size:0.7rem;color:#888;margin-top:2px">CoinGecko BTC: $' + formatNumber(refPrice.toFixed(0)) + '</div>';
-        html += '<div style="font-size:0.7rem;color:#888">1 ' + pool.token0Symbol + ' = ' + impliedUsd + '</div>';
-      }
+      var html = poolPrice + ' ' + label;
+      try {
+        var hRes = await fetch('/api/history/' + pool.id);
+        var hist = await hRes.json();
+        var last = hist.length > 0 ? hist[hist.length - 1] : null;
+        if (last && last.refPrice && rawPrice < 0.01) {
+          html += '<div style="font-size:0.7rem;color:#888;margin-top:2px">CoinGecko BTC: $' + formatNumber(last.refPrice.toFixed(0)) + '</div>';
+          html += '<div style="font-size:0.7rem;color:#888">1 ' + pool.token0Symbol + ' = $' + formatNumber((last.refPrice / last.poolPrice).toFixed(2)) + '</div>';
+        }
+      } catch(e) {}
       el.innerHTML = html;
     });
   } catch (e) {
@@ -315,6 +351,51 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, 30000);
+
+// Price chart
+var chart = null;
+var poolSeries = null;
+var cgSeries = null;
+
+async function initChart() {
+  var LWC = window.LightweightCharts || window.lwc;
+  if (!LWC) { console.log('LightweightCharts not loaded'); return; }
+  var container = document.getElementById('chart-container');
+  chart = LWC.createChart(container, {
+    layout: { background: { color: '#161616' }, textColor: '#888' },
+    grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+    timeScale: { timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: '#2a2a2a' },
+    crosshair: { mode: 0 },
+  });
+  poolSeries = chart.addLineSeries({ color: '#ef4444', lineWidth: 2, title: 'Pool' });
+  cgSeries = chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, title: 'CoinGecko' });
+  chart.timeScale().fitContent();
+}
+
+async function refreshChart() {
+  try {
+    var poolId = 'svjusd-wcbtc-citrea';
+    var res = await fetch('/api/history/' + poolId);
+    var history = await res.json();
+    if (history.length < 2) return;
+
+    document.getElementById('chart-card').style.display = 'block';
+    if (!chart) { await initChart(); if (!chart) return; }
+
+    poolSeries.setData(history.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
+
+    var cgPoints = history.filter(function(h) { return h.refPrice !== null; });
+    if (cgPoints.length > 0) {
+      cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
+    }
+
+    chart.timeScale().fitContent();
+  } catch(e) { console.error('Chart error:', e); }
+}
+
+refreshChart();
+setInterval(refreshChart, 60000);
 </script>
 </body>
 </html>`;
