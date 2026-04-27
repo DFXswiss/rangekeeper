@@ -264,6 +264,14 @@ export class RebalanceEngine {
         tickLower: b.tickLower,
         tickUpper: b.tickUpper,
       })),
+      consecutiveErrors: this.consecutiveErrors,
+      emergencyStopped: this.ctx.emergencyStop.isStopped(),
+      emergencyReason: this.ctx.emergencyStop.isStopped() ? this.ctx.emergencyStop.getReason() : undefined,
+      walletAddress: this.ctx.wallet.address,
+      chainId: poolEntry.chain.chainId,
+      poolAddress: undefined, // set during init
+      token0Symbol: poolEntry.pool.token0.symbol,
+      token1Symbol: poolEntry.pool.token1.symbol,
     });
 
     // Check depeg
