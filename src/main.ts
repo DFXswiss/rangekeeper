@@ -3,7 +3,7 @@ import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
 import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
 import { readFileSync, existsSync } from 'fs';
-import { updatePoolStatus, importPriceHistory, importBandEvents, setDataDir, loadPersistedData, startPersistTimer, persistNow } from './health/health-server';
+import { updatePoolStatus, importPriceHistory, importBandEvents, setDataDir, loadPersistedData, startPersistTimer, persistNow, getPriceHistory, getBandEvents } from './health/health-server';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -73,40 +73,44 @@ async function main(): Promise<void> {
   const pools = loadPoolConfigs();
   logger.info({ poolCount: pools.length }, 'Loaded pool configurations');
 
-  // Load price history seed data if available
-  const seedPaths = [
-    path.join(dataDir, 'price-history-seed.json'),
-    path.resolve(process.cwd(), 'data-seed', 'price-history-seed.json'),
-  ];
-  const seedPath = seedPaths.find((p) => existsSync(p));
-  if (seedPath) {
-    try {
-      const seedData = JSON.parse(readFileSync(seedPath, 'utf-8'));
-      for (const pool of pools) {
-        importPriceHistory(pool.id, seedData);
+  // Load seed data only if no persisted data exists (first run or volume wiped)
+  const hasPersisted = pools.some((p) => getPriceHistory(p.id).length > 0);
+  if (!hasPersisted) {
+    const seedPaths = [
+      path.join(dataDir, 'price-history-seed.json'),
+      path.resolve(process.cwd(), 'data-seed', 'price-history-seed.json'),
+    ];
+    const seedPath = seedPaths.find((p) => existsSync(p));
+    if (seedPath) {
+      try {
+        const seedData = JSON.parse(readFileSync(seedPath, 'utf-8'));
+        for (const pool of pools) {
+          importPriceHistory(pool.id, seedData);
+        }
+        logger.info({ entries: seedData.length }, 'Loaded price history seed data');
+      } catch (err) {
+        logger.warn({ err }, 'Failed to load price history seed data');
       }
-      logger.info({ entries: seedData.length }, 'Loaded price history seed data');
-    } catch (err) {
-      logger.warn({ err }, 'Failed to load price history seed data');
     }
-  }
 
-  // Load band events seed data
-  const bandSeedPaths = [
-    path.join(dataDir, 'band-events-seed.json'),
-    path.resolve(process.cwd(), 'data-seed', 'band-events-seed.json'),
-  ];
-  const bandSeedPath = bandSeedPaths.find((p) => existsSync(p));
-  if (bandSeedPath) {
-    try {
-      const bandSeedData = JSON.parse(readFileSync(bandSeedPath, 'utf-8'));
-      for (const pool of pools) {
-        importBandEvents(pool.id, bandSeedData);
+    const bandSeedPaths = [
+      path.join(dataDir, 'band-events-seed.json'),
+      path.resolve(process.cwd(), 'data-seed', 'band-events-seed.json'),
+    ];
+    const bandSeedPath = bandSeedPaths.find((p) => existsSync(p));
+    if (bandSeedPath) {
+      try {
+        const bandSeedData = JSON.parse(readFileSync(bandSeedPath, 'utf-8'));
+        for (const pool of pools) {
+          importBandEvents(pool.id, bandSeedData);
+        }
+        logger.info({ entries: bandSeedData.length }, 'Loaded band events seed data');
+      } catch (err) {
+        logger.warn({ err }, 'Failed to load band events seed data');
       }
-      logger.info({ entries: bandSeedData.length }, 'Loaded band events seed data');
-    } catch (err) {
-      logger.warn({ err }, 'Failed to load band events seed data');
     }
+  } else {
+    logger.info('Skipping seed data (persisted data loaded)');
   }
 
   for (const poolEntry of pools) {
