@@ -38,7 +38,12 @@ export class NonceTracker {
   }
 
   async syncOnFailover(): Promise<void> {
-    const onChainNonce = await this.getProvider().getTransactionCount(this.walletAddress, 'latest');
+    let onChainNonce: number;
+    try {
+      onChainNonce = await this.getProvider().getTransactionCount(this.walletAddress, 'pending');
+    } catch {
+      onChainNonce = await this.getProvider().getTransactionCount(this.walletAddress, 'latest');
+    }
     this.currentNonce = Math.max(this.currentNonce ?? 0, onChainNonce);
     this.logger.info(
       { walletAddress: this.walletAddress, nonce: this.currentNonce, onChainNonce },
