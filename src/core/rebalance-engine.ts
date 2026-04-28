@@ -232,8 +232,10 @@ export class RebalanceEngine {
     }
 
     // Register existing bands in health server for chart overlays
+    // Use lastRebalanceTime (persisted from previous run) so overlays span the correct time range
+    const bandOpenTime = this.lastRebalanceTime > 0 ? Math.floor(this.lastRebalanceTime / 1000) : undefined;
     for (const band of this.bandManager.getBands()) {
-      recordBandOpen(poolEntry.id, band.tokenId.toNumber(), band.tickLower, band.tickUpper);
+      recordBandOpen(poolEntry.id, band.tokenId.toNumber(), band.tickLower, band.tickUpper, bandOpenTime);
     }
 
     // Ensure token approvals for both NFT manager and swap router

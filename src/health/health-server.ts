@@ -101,11 +101,11 @@ export interface BandEvent {
 
 const bandEvents: Map<string, BandEvent[]> = new Map();
 
-export function recordBandOpen(poolId: string, tokenId: number, tickLower: number, tickUpper: number): void {
+export function recordBandOpen(poolId: string, tokenId: number, tickLower: number, tickUpper: number, openTime?: number): void {
   if (!bandEvents.has(poolId)) bandEvents.set(poolId, []);
   const events = bandEvents.get(poolId)!;
   if (!events.find((e) => e.tokenId === tokenId && e.closeTime === null)) {
-    events.push({ tokenId, tickLower, tickUpper, openTime: Math.floor(Date.now() / 1000), closeTime: null });
+    events.push({ tokenId, tickLower, tickUpper, openTime: openTime ?? Math.floor(Date.now() / 1000), closeTime: null });
   }
 }
 
