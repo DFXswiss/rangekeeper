@@ -40,6 +40,8 @@ The wallet is funded once with both tokens of the pair (e.g. USDT + ZCHF). On fi
 
 Each band covers `rangeWidthPercent / 7` of the total range. Example: 3% total range = ~0.43% per band.
 
+> **Minimum band width constraint:** Uniswap V3 requires tick-aligned positions. The minimum band width equals the pool's tick spacing: 60 ticks for 0.3% fee tier, 10 ticks for 0.05% fee tier, 200 ticks for 1% fee tier. With 7 bands at 0.3% fee tier, the minimum total range is 7 × 60 = 420 ticks ≈ **4.2%**. Any `rangeWidthPercent` below this effective minimum will be silently rounded up to the tick-aligned minimum. The dashboard shows the actual (tick-aligned) range, not the configured value.
+
 **Why 7 bands?** This is a trade-off between three factors:
 
 - **Too few bands** (e.g. 3): After dissolving 1, only 2 remain. That leaves very thin liquidity for the swap step, increasing slippage.
@@ -145,9 +147,14 @@ cp .env.example .env
 | `DRY_RUN` | Simulate without on-chain writes (true/false) | No (default: false) |
 | `MAX_TOTAL_LOSS_PERCENT` | Max portfolio loss before bot stops | No (default: 10) |
 
-#### `config/pools.yaml`
+| `POOL_CONFIG` | Pool config file name (e.g. `pools.dev.yaml`) | **Yes** |
+| `RESET_BANDS` | Close all bands on startup and re-mint with current config | No (default: false) |
 
-Pool configurations with token addresses, fee tier, strategy parameters and monitoring intervals. Environment variables can be referenced with `${VAR_NAME}`.
+#### Pool config (`config/pools.*.yaml`)
+
+Each environment requires its own pool config file (e.g. `pools.dev.yaml`, `pools.prd.yaml`), selected via the `POOL_CONFIG` environment variable. There is no default — the bot fails on startup if `POOL_CONFIG` is not set.
+
+Pool configurations contain token addresses, fee tier, strategy parameters and monitoring intervals. Environment variables can be referenced with `${VAR_NAME}`.
 
 ```yaml
 pools:
@@ -246,6 +253,15 @@ First start          Normal operation              Price drifts into trigger ban
 
 The total range (`rangeWidthPercent`) is divided into 7 equal bands, each its own Uniswap V3 NFT position. Band width per band = `rangeWidthPercent / 7` (e.g. 3% total = ~0.43% per band).
 
+**Minimum band width by fee tier:**
+
+| Fee Tier | Tick Spacing | Min Band Width | Min 7-Band Range |
+|----------|-------------|----------------|-------------------|
+| 0.01% (100) | 1 | 0.01% | 0.07% |
+| 0.05% (500) | 10 | 0.10% | 0.70% |
+| 0.3% (3000) | 60 | 0.60% | **4.2%** |
+| 1% (10000) | 200 | 2.02% | 14.1% |
+
 | Band Index | Role | When price enters |
 |------------|------|-------------------|
 | 0 | Buffer lower | Already handled — rebalance triggered at band 1 |
@@ -283,10 +299,35 @@ This ensures no funds are lost even in worst-case crash scenarios. The trade-off
 | Gas spike | >10x normal | Pause rebalancing |
 | Token depeg | >5% from expected ratio | Emergency withdraw all bands, stop bot |
 
-### Health Endpoints
+### Health & Dashboard
 
-- `GET /health` — Liveness check
-- `GET /status` — Detailed bot status with band positions and active band index
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Liveness check |
+| `GET /status` | Bot status with band positions, vault rate, strategy config |
+| `GET /dashboard` | Web dashboard with price chart, band overlays, strategy info |
+| `GET /api/history/:poolId` | Price history (pool + CoinGecko, vault-rate adjusted) |
+| `GET /api/bands/:poolId` | Band lifecycle events (open/close times, liquidity amounts) |
+
+#### Data persistence
+
+Price history and band events are persisted to `/app/data/` every 5 minutes and on graceful shutdown. On startup, persisted data is loaded first; seed data (`data/*-seed.json`) is only used on first run when no persisted data exists.
+
+| File | Content | Location |
+|------|---------|----------|
+| `price-history.json` | Up to 20,160 entries (7 days at 30s intervals) | Docker volume |
+| `band-events.json` | All band open/close events with timestamps and liquidity | Docker volume |
+| `price-history-seed.json` | Bootstrap data for first deployment | Docker image (`/app/data-seed/`) |
+| `band-events-seed.json` | Bootstrap band events with on-chain mint timestamps | Docker image (`/app/data-seed/`) |
+
+#### Band reset
+
+To close all bands and re-mint with a new config, set `RESET_BANDS=true` in the environment. On startup, the bot will:
+1. Emergency-withdraw all existing bands (liquidity returned to wallet)
+2. Record band close events (historical bands remain visible in dashboard)
+3. Re-mint 7 new bands with the current `rangeWidthPercent`
+
+**Remove `RESET_BANDS` after the reset completes** — otherwise it triggers on every restart.
 
 ## Project Structure
 
