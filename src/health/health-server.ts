@@ -502,6 +502,7 @@ var bandRangeSeries = null;
 var chartRangeSeconds = 604800;
 var allHistory = [];
 var allBands = [];
+var lastSampled = [];
 
 async function initChart() {
   var LWC = window.LightweightCharts || window.lwc;
@@ -559,6 +560,7 @@ function applyChartRange() {
   var maxPoints = 1500;
   var step = filtered.length > maxPoints ? Math.ceil(filtered.length / maxPoints) : 1;
   var sampled = step === 1 ? filtered : filtered.filter(function(_, i) { return i % step === 0 || i === filtered.length - 1; });
+  lastSampled = sampled;
 
   poolSeries.setData(sampled.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
   var cgPoints = sampled.filter(function(h) { return h.refPrice !== null; });
@@ -586,14 +588,25 @@ function applyChartRange() {
   renderBandOverlays();
 }
 
+function findNearestTime(target, data) {
+  // Binary search for nearest timestamp in sampled data
+  var lo = 0, hi = data.length - 1;
+  while (lo < hi) {
+    var mid = Math.floor((lo + hi) / 2);
+    if (data[mid].time < target) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && Math.abs(data[lo - 1].time - target) < Math.abs(data[lo].time - target)) lo--;
+  return data[lo].time;
+}
+
 function renderBandOverlays() {
   var container = document.getElementById('chart-container');
   // Remove old overlays
   container.querySelectorAll('.band-overlay').forEach(function(el) { el.remove(); });
-  if (!chart || !poolSeries || allBands.length === 0) return;
+  if (!chart || !poolSeries || allBands.length === 0 || lastSampled.length === 0) return;
 
   var colors = ['rgba(220,38,38,0.15)', 'rgba(234,179,8,0.15)', 'rgba(20,83,45,0.3)', 'rgba(20,83,45,0.4)', 'rgba(20,83,45,0.3)', 'rgba(234,179,8,0.15)', 'rgba(220,38,38,0.15)'];
-  var latestVaultRate = allHistory.length > 0 ? (allHistory[allHistory.length - 1].vaultRate || 1) : 1;
+  var latestVaultRate = lastSampled.length > 0 ? (lastSampled[lastSampled.length - 1].vaultRate || 1) : 1;
 
   allBands.forEach(function(band, idx) {
     var rawLower = Math.pow(1.0001, band.tickLower);
@@ -605,8 +618,10 @@ function renderBandOverlays() {
     var yBottom = poolSeries.priceToCoordinate(priceBottom);
     if (yTop === null || yBottom === null) return;
 
-    var xLeft = chart.timeScale().timeToCoordinate(band.openTime);
-    var xRight = band.closeTime ? chart.timeScale().timeToCoordinate(band.closeTime) : container.clientWidth;
+    // Snap to nearest data point so timeToCoordinate finds a match
+    var snappedOpen = findNearestTime(band.openTime, lastSampled);
+    var xLeft = chart.timeScale().timeToCoordinate(snappedOpen);
+    var xRight = band.closeTime ? chart.timeScale().timeToCoordinate(findNearestTime(band.closeTime, lastSampled)) : container.clientWidth;
     if (xLeft === null) xLeft = 0;
     if (xRight === null) xRight = container.clientWidth;
 
