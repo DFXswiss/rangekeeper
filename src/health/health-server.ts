@@ -270,8 +270,8 @@ function getDashboardHtml(): string {
   .error { color: #f87171; }
   .muted { color: #666; }
   .band-cell { width: 100%; height: 18px; border-radius: 3px; }
-  .band-cell.buffer { background: #1e293b; }
-  .band-cell.trigger { background: #312e81; }
+  .band-cell.buffer { background: #7f1d1d; }
+  .band-cell.trigger { background: #713f12; }
   .band-cell.safe { background: #14532d; }
   .band-cell.active { outline: 2px solid #fff; outline-offset: -1px; }
   .links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
@@ -571,7 +571,7 @@ function renderBandOverlays() {
   container.querySelectorAll('.band-overlay').forEach(function(el) { el.remove(); });
   if (!chart || !poolSeries || allBands.length === 0) return;
 
-  var colors = ['rgba(30,41,59,0.3)', 'rgba(49,46,129,0.3)', 'rgba(20,83,45,0.3)', 'rgba(20,83,45,0.4)', 'rgba(20,83,45,0.3)', 'rgba(49,46,129,0.3)', 'rgba(30,41,59,0.3)'];
+  var colors = ['rgba(220,38,38,0.15)', 'rgba(234,179,8,0.15)', 'rgba(20,83,45,0.3)', 'rgba(20,83,45,0.4)', 'rgba(20,83,45,0.3)', 'rgba(234,179,8,0.15)', 'rgba(220,38,38,0.15)'];
   var latestVaultRate = allHistory.length > 0 ? (allHistory[allHistory.length - 1].vaultRate || 1) : 1;
 
   allBands.forEach(function(band, idx) {
