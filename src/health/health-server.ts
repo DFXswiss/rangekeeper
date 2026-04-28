@@ -440,6 +440,7 @@ async function initChart() {
     grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
     timeScale: { timeVisible: true, secondsVisible: false },
     rightPriceScale: { borderColor: '#2a2a2a' },
+    localization: { priceFormatter: function(p) { return formatNumber(Math.round(p).toString()); } },
     crosshair: { mode: 0 },
   });
   poolSeries = chart.addLineSeries({ color: '#ef4444', lineWidth: 2, title: 'Pool' });
