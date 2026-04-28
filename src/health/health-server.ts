@@ -55,6 +55,45 @@ const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: num
 let cachedRefPrice: number | null = null;
 let lastRefFetch = 0;
 
+// Portfolio history ring buffer (7 days at 30s intervals)
+export interface PortfolioSnapshot {
+  time: number;
+  totalToken0: number; // total svJUSD (wallet + positions), raw units (divided by 1e18)
+  totalToken1: number; // total WCBTC (wallet + positions), raw units (divided by 1e18)
+  valueUsd: number;    // total USD value
+}
+
+export interface PortfolioConfig {
+  initialToken0: number;
+  initialToken1: number;
+  initialValueUsd: number;
+  startTime: number;
+}
+
+const portfolioHistory: Map<string, PortfolioSnapshot[]> = new Map();
+const portfolioConfig: Map<string, PortfolioConfig> = new Map();
+
+export function recordPortfolio(poolId: string, snapshot: PortfolioSnapshot): void {
+  if (!portfolioHistory.has(poolId)) portfolioHistory.set(poolId, []);
+  const history = portfolioHistory.get(poolId)!;
+  history.push(snapshot);
+  if (history.length > MAX_HISTORY) history.shift();
+}
+
+export function setPortfolioInitial(poolId: string, config: PortfolioConfig): void {
+  if (!portfolioConfig.has(poolId)) {
+    portfolioConfig.set(poolId, config);
+  }
+}
+
+export function getPortfolioHistory(poolId: string): PortfolioSnapshot[] {
+  return portfolioHistory.get(poolId) ?? [];
+}
+
+export function getPortfolioConfig(poolId: string): PortfolioConfig | undefined {
+  return portfolioConfig.get(poolId);
+}
+
 async function fetchRefPrice(): Promise<void> {
   if (Date.now() - lastRefFetch < 60_000) return;
   lastRefFetch = Date.now();
@@ -179,6 +218,27 @@ export function loadPersistedData(): void {
     }
   }
 
+  const portPath = dataDir + '/portfolio-history.json';
+  if (existsSync(portPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(portPath, 'utf-8'));
+      if (raw.history) {
+        for (const [poolId, entries] of Object.entries(raw.history)) {
+          const existing = portfolioHistory.get(poolId) ?? [];
+          portfolioHistory.set(poolId, [...(entries as PortfolioSnapshot[]), ...existing]);
+        }
+      }
+      if (raw.config) {
+        for (const [poolId, config] of Object.entries(raw.config)) {
+          portfolioConfig.set(poolId, config as PortfolioConfig);
+        }
+      }
+      logger.info({ path: portPath }, 'Loaded persisted portfolio history');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load persisted portfolio history');
+    }
+  }
+
   const bandPath = dataDir + '/band-events.json';
   if (existsSync(bandPath)) {
     try {
@@ -207,6 +267,16 @@ function persistData(): void {
       bandObj[poolId] = entries;
     }
     writeFileSync(dataDir + '/band-events.json', JSON.stringify(bandObj));
+
+    const portObj: Record<string, unknown> = {};
+    for (const [poolId, entries] of portfolioHistory.entries()) {
+      portObj[poolId] = entries;
+    }
+    const portConfObj: Record<string, unknown> = {};
+    for (const [poolId, config] of portfolioConfig.entries()) {
+      portConfObj[poolId] = config;
+    }
+    writeFileSync(dataDir + '/portfolio-history.json', JSON.stringify({ history: portObj, config: portConfObj }));
   } catch {
     // non-critical, will retry next interval
   }
@@ -260,6 +330,13 @@ export function startHealthServer(port: number): void {
 
   app.get('/api/bands/:poolId', (req, res) => {
     res.json(getBandEvents(req.params.poolId));
+  });
+
+  app.get('/api/portfolio/:poolId', (req, res) => {
+    res.json({
+      config: getPortfolioConfig(req.params.poolId),
+      history: getPortfolioHistory(req.params.poolId),
+    });
   });
 
   app.get('/dashboard', (_req, res) => {
@@ -335,6 +412,12 @@ function getDashboardHtml(): string {
 
 <div id="pools-container"></div>
 
+</div>
+
+<div class="card" id="portfolio-card" style="display:none">
+  <h2>Portfolio</h2>
+  <div class="grid" id="portfolio-grid"></div>
+  <div id="portfolio-chart-container" style="height:200px;position:relative;overflow:hidden;margin-top:12px"></div>
 </div>
 
 <div class="card" id="chart-card" style="display:none">
@@ -699,6 +782,66 @@ function renderBandOverlays() {
 
 refreshChart();
 setInterval(refreshChart, 60000);
+
+// Portfolio tracking
+var portfolioChart = null;
+var token0Series = null;
+var token1Series = null;
+
+async function refreshPortfolio() {
+  try {
+    var poolId = 'svjusd-wcbtc-citrea';
+    var res = await fetch('/api/portfolio/' + poolId);
+    var data = await res.json();
+    if (!data.history || data.history.length < 2) return;
+
+    document.getElementById('portfolio-card').style.display = 'block';
+    var hist = data.history;
+    var conf = data.config;
+    var last = hist[hist.length - 1];
+
+    // Grid metrics
+    var grid = document.getElementById('portfolio-grid');
+    var pnlToken0 = conf ? (last.totalToken0 - conf.initialToken0) : 0;
+    var pnlToken1 = conf ? (last.totalToken1 - conf.initialToken1) : 0;
+    var pnlUsd = conf ? (last.valueUsd - conf.initialValueUsd) : 0;
+    var pnlPct = conf && conf.initialValueUsd > 0 ? (pnlUsd / conf.initialValueUsd * 100) : 0;
+
+    grid.innerHTML = '<div class="metric"><div class="label">svJUSD (total)</div><div class="value">' + last.totalToken0.toFixed(2) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlToken0 >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlToken0 >= 0 ? '+' : '') + pnlToken0.toFixed(2) + '</div>' : '') + '</div></div>' +
+      '<div class="metric"><div class="label">WCBTC (total)</div><div class="value">' + last.totalToken1.toFixed(8) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlToken1 >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlToken1 >= 0 ? '+' : '') + pnlToken1.toFixed(8) + '</div>' : '') + '</div></div>' +
+      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlUsd >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlUsd >= 0 ? '+' : '') + '$' + formatNumber(pnlUsd.toFixed(0)) + ' (' + pnlPct.toFixed(2) + '%)</div>' : '') + '</div></div>' +
+      '<div class="metric"><div class="label">P&L</div><div class="value ' + (pnlPct >= 0 ? 'ok' : 'error') + '">' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%</div></div>';
+
+    // Portfolio chart (token amounts over time)
+    if (!portfolioChart) {
+      var LWC = window.LightweightCharts || window.lwc;
+      if (!LWC) return;
+      var container = document.getElementById('portfolio-chart-container');
+      portfolioChart = LWC.createChart(container, {
+        layout: { background: { color: '#161616' }, textColor: '#888' },
+        grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+        timeScale: { timeVisible: true, secondsVisible: false },
+        rightPriceScale: { borderColor: '#2a2a2a' },
+        crosshair: { mode: 0 },
+      });
+      token0Series = portfolioChart.addLineSeries({ color: '#4ade80', lineWidth: 1, title: 'svJUSD', priceScaleId: 'left' });
+      token1Series = portfolioChart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'WCBTC' });
+      portfolioChart.priceScale('left').applyOptions({ visible: true, borderColor: '#2a2a2a' });
+    }
+
+    // Downsample
+    var maxP = 1500;
+    var stepP = hist.length > maxP ? Math.ceil(hist.length / maxP) : 1;
+    var sampled = stepP === 1 ? hist : hist.filter(function(_, i) { return i % stepP === 0 || i === hist.length - 1; });
+
+    token0Series.setData(sampled.map(function(h) { return { time: h.time, value: h.totalToken0 }; }));
+    token1Series.setData(sampled.map(function(h) { return { time: h.time, value: h.totalToken1 }; }));
+    portfolioChart.timeScale().fitContent();
+  } catch(e) { console.error('Portfolio error:', e); }
+}
+
+refreshPortfolio();
+setInterval(refreshPortfolio, 30000);
 </script>
 </body>
 </html>`;
