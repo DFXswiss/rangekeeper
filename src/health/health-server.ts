@@ -498,6 +498,7 @@ setInterval(refresh, 30000);
 var chart = null;
 var poolSeries = null;
 var cgSeries = null;
+var bandRangeSeries = null;
 var chartRangeSeconds = 604800;
 var allHistory = [];
 var allBands = [];
@@ -516,6 +517,7 @@ async function initChart() {
   });
   poolSeries = chart.addLineSeries({ color: '#ef4444', lineWidth: 2, title: 'Pool' });
   cgSeries = chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, title: 'CoinGecko' });
+  bandRangeSeries = chart.addLineSeries({ color: 'transparent', lineWidth: 0, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false });
   chart.timeScale().fitContent();
   chart.timeScale().subscribeVisibleLogicalRangeChange(renderBandOverlays);
   chart.subscribeCrosshairMove(renderBandOverlays);
@@ -561,6 +563,25 @@ function applyChartRange() {
   poolSeries.setData(sampled.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
   var cgPoints = sampled.filter(function(h) { return h.refPrice !== null; });
   cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
+
+  // Force Y-axis to include all band price ranges
+  if (bandRangeSeries && allBands.length > 0 && sampled.length > 1) {
+    var vr = sampled[sampled.length - 1].vaultRate || 1;
+    var bandMin = Infinity, bandMax = -Infinity;
+    allBands.forEach(function(band) {
+      var rawL = Math.pow(1.0001, band.tickLower);
+      var rawU = Math.pow(1.0001, band.tickUpper);
+      var top = (rawL < 0.01 ? 1 / rawL : rawU) * vr;
+      var bot = (rawL < 0.01 ? 1 / rawU : rawL) * vr;
+      if (top > bandMax) bandMax = top;
+      if (bot < bandMin) bandMin = bot;
+    });
+    bandRangeSeries.setData([
+      { time: sampled[0].time, value: bandMin },
+      { time: sampled[sampled.length - 1].time, value: bandMax },
+    ]);
+  }
+
   chart.timeScale().fitContent();
   renderBandOverlays();
 }
