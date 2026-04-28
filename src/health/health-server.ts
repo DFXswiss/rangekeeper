@@ -720,11 +720,15 @@ function applyChartRange() {
   var cgPoints = sampled.filter(function(h) { return h.refPrice !== null; });
   cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
 
-  // Force Y-axis to include all band price ranges
+  // Force Y-axis to include band price ranges visible in the current time window
   if (bandRangeSeries && allBands.length > 0 && sampled.length > 1) {
     var vr = sampled[sampled.length - 1].vaultRate || 1;
     var bandMin = Infinity, bandMax = -Infinity;
+    var visibleStart = sampled[0].time;
+    var visibleEnd = sampled[sampled.length - 1].time;
     allBands.forEach(function(band) {
+      var bandClose = band.closeTime || Infinity;
+      if (bandClose < visibleStart || band.openTime > visibleEnd) return;
       var rawL = Math.pow(1.0001, band.tickLower);
       var rawU = Math.pow(1.0001, band.tickUpper);
       var top = (rawL < 0.01 ? 1 / rawL : rawU) * vr;
@@ -732,10 +736,12 @@ function applyChartRange() {
       if (top > bandMax) bandMax = top;
       if (bot < bandMin) bandMin = bot;
     });
-    bandRangeSeries.setData([
-      { time: sampled[0].time, value: bandMin },
-      { time: sampled[sampled.length - 1].time, value: bandMax },
-    ]);
+    if (bandMin < Infinity && bandMax > -Infinity) {
+      bandRangeSeries.setData([
+        { time: sampled[0].time, value: bandMin },
+        { time: sampled[sampled.length - 1].time, value: bandMax },
+      ]);
+    }
   }
 
   chart.timeScale().fitContent();
