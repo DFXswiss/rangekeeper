@@ -874,6 +874,8 @@ async function refreshPortfolio() {
       token0Series = portfolioChart.addLineSeries({ color: '#4ade80', lineWidth: 1, title: 'JUSD', priceScaleId: 'left' });
       token1Series = portfolioChart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'BTC' });
       portfolioChart.priceScale('left').applyOptions({ visible: true, borderColor: '#2a2a2a' });
+      portfolioChart.priceScale('right').applyOptions({ visible: true, borderColor: '#2a2a2a' });
+      token1Series.applyOptions({ priceFormat: { type: 'custom', formatter: function(p) { return p.toFixed(8); } } });
     }
 
     // Downsample
