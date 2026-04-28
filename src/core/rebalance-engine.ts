@@ -270,12 +270,18 @@ export class RebalanceEngine {
       state: this.state,
       currentTick: poolState.tick,
       activeBand: this.bandManager.getBandIndexForTick(poolState.tick),
-      bands: this.bandManager.getBands().map((b) => ({
-        index: b.index,
-        tokenId: b.tokenId.toNumber(),
-        tickLower: b.tickLower,
-        tickUpper: b.tickUpper,
-      })),
+      bands: this.bandManager.getBands().map((b) => {
+        const event = getBandEvents(poolEntry.id).find((e) => e.tokenId === b.tokenId.toNumber() && e.closeTime === null);
+        return {
+          index: b.index,
+          tokenId: b.tokenId.toNumber(),
+          tickLower: b.tickLower,
+          tickUpper: b.tickUpper,
+          amount0: event?.amount0,
+          amount1: event?.amount1,
+          liquidity: event?.liquidity,
+        };
+      }),
       consecutiveErrors: this.consecutiveErrors,
       emergencyStopped: this.ctx.emergencyStop.isStopped(),
       emergencyReason: this.ctx.emergencyStop.isStopped() ? this.ctx.emergencyStop.getReason() : undefined,
@@ -524,7 +530,11 @@ export class RebalanceEngine {
           tickLower: bandConfig.tickLower,
           tickUpper: bandConfig.tickUpper,
         });
-        recordBandOpen(poolEntry.id, result.tokenId.toNumber(), bandConfig.tickLower, bandConfig.tickUpper);
+        recordBandOpen(poolEntry.id, result.tokenId.toNumber(), bandConfig.tickLower, bandConfig.tickUpper, undefined, {
+          amount0: result.amount0.toString(),
+          amount1: result.amount1.toString(),
+          liquidity: result.liquidity.toString(),
+        });
       }
 
       this.bandManager.setBands(bands, layout.bandTickWidth);
@@ -711,7 +721,11 @@ export class RebalanceEngine {
         { tokenId: mintResult.tokenId, tickLower: newBandTicks.tickLower, tickUpper: newBandTicks.tickUpper },
         direction === 'lower' ? 'start' : 'end',
       );
-      recordBandOpen(poolEntry.id, mintResult.tokenId.toNumber(), newBandTicks.tickLower, newBandTicks.tickUpper);
+      recordBandOpen(poolEntry.id, mintResult.tokenId.toNumber(), newBandTicks.tickLower, newBandTicks.tickUpper, undefined, {
+        amount0: mintResult.amount0.toString(),
+        amount1: mintResult.amount1.toString(),
+        liquidity: mintResult.liquidity.toString(),
+      });
 
       this.lastRebalanceTime = Date.now();
       this.consecutiveErrors = 0;
