@@ -1,4 +1,5 @@
 import { Contract, BigNumber, Wallet, ContractTransaction, constants } from 'ethers';
+import { TickMath } from '@uniswap/v3-sdk';
 import { getLogger } from '../util/logger';
 import { getSwapRouterContract, getErc20Contract, ensureApproval } from '../chain/contracts';
 import { withRetry, NonRetryableError } from '../util/retry';
@@ -82,6 +83,8 @@ export class SwapExecutor {
       tokenInIsToken0,
     );
 
+    const sqrtPriceLimitX96 = this.computeSqrtPriceLimit(currentTick, slippagePercent, tokenInIsToken0);
+
     const nonceOverride = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const tx: ContractTransaction = await withRetry(
       () =>
@@ -93,15 +96,14 @@ export class SwapExecutor {
             recipient: w.address,
             amountIn,
             amountOutMinimum,
-            sqrtPriceLimitX96: 0,
+            sqrtPriceLimitX96,
           },
           nonceOverride,
         ),
       'swap',
     );
 
-    const receipt = await tx.wait();
-    this.nonceTracker?.confirmNonce();
+    const receipt = await this.waitAndConfirmNonce(tx);
     if (receipt.status === 0) {
       throw new Error('Swap transaction reverted on-chain');
     }
@@ -199,5 +201,39 @@ export class SwapExecutor {
 
     // Fallback: assume 1:1 ratio (safe for same-decimal stablecoin pairs)
     return amountIn.mul(slippageMul).div(10000);
+  }
+
+  private computeSqrtPriceLimit(
+    currentTick?: number,
+    slippagePercent?: number,
+    tokenInIsToken0?: boolean,
+  ): BigNumber {
+    if (currentTick === undefined || slippagePercent === undefined || tokenInIsToken0 === undefined) {
+      return BigNumber.from(0);
+    }
+
+    try {
+      const slippageTicks = Math.ceil(Math.log(1 + slippagePercent / 100) / Math.log(1.0001));
+      const limitTick = tokenInIsToken0
+        ? Math.max(currentTick - slippageTicks, TickMath.MIN_TICK)
+        : Math.min(currentTick + slippageTicks, TickMath.MAX_TICK);
+      return BigNumber.from(TickMath.getSqrtRatioAtTick(limitTick).toString());
+    } catch (err) {
+      this.logger.warn({ err, currentTick }, 'Failed to compute sqrtPriceLimitX96, using 0 (no limit)');
+      return BigNumber.from(0);
+    }
+  }
+
+  private async waitAndConfirmNonce(tx: ContractTransaction): Promise<{ status?: number; transactionHash: string; gasUsed: BigNumber; logs: Array<{ topics: string[]; address: string; data: string }>; events?: Array<{ event?: string; args?: Record<string, unknown> }> }> {
+    try {
+      const receipt = await tx.wait();
+      this.nonceTracker?.confirmNonce();
+      return receipt;
+    } catch (err) {
+      if (this.nonceTracker) {
+        await this.nonceTracker.syncOnFailover();
+      }
+      throw err;
+    }
   }
 }
