@@ -262,9 +262,8 @@ export class RebalanceEngine {
     // Set portfolio initial from config (if not already set from persistence)
     if (poolEntry.portfolio) {
       setPortfolioInitial(poolEntry.id, {
-        initialToken0: poolEntry.portfolio.initialToken0,
-        initialToken1: poolEntry.portfolio.initialToken1,
-        initialValueUsd: 0, // calculated on first tracking
+        initialJusd: poolEntry.portfolio.initialJusd,
+        initialBtc: poolEntry.portfolio.initialBtc,
         startTime: Math.floor(Date.now() / 1000),
       });
     }
@@ -587,11 +586,10 @@ export class RebalanceEngine {
       balanceTracker.setInitialValue(initialValue);
       this.logger.info({ initialValueUsd: initialValue.toFixed(2) }, 'Initial portfolio value set');
 
-      // Record initial investment for portfolio tracking
+      // Record initial investment for portfolio tracking (convert svJUSD to JUSD)
       setPortfolioInitial(poolEntry.id, {
-        initialToken0: bal0,
-        initialToken1: bal1,
-        initialValueUsd: initialValue,
+        initialJusd: bal0 * this.vaultRate,
+        initialBtc: bal1,
         startTime: Math.floor(Date.now() / 1000),
       });
 
@@ -866,15 +864,19 @@ export class RebalanceEngine {
         }
       }
 
-      // USD value: token0 (svJUSD) valued at vaultRate, token1 (WCBTC) valued at BTC price
+      // Convert to JUSD + cBTC: svJUSD * vaultRate = JUSD, WCBTC = cBTC (1:1)
+      const totalJusd = totalAmount0 * vaultRate;
+      const totalBtc = totalAmount1;
+
+      // USD value
       const rawPrice = Math.pow(1.0001, poolState.tick);
       const btcPriceUsd = (rawPrice < 0.01 ? 1 / rawPrice : rawPrice) * vaultRate;
-      const valueUsd = totalAmount0 * vaultRate + totalAmount1 * btcPriceUsd;
+      const valueUsd = totalJusd + totalBtc * btcPriceUsd;
 
       recordPortfolio(poolEntry.id, {
         time: Math.floor(Date.now() / 1000),
-        totalToken0: totalAmount0,
-        totalToken1: totalAmount1,
+        jusd: totalJusd,
+        btc: totalBtc,
         valueUsd,
       });
     } catch (err) {

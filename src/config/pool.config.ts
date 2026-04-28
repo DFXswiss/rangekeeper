@@ -68,8 +68,8 @@ const monitoringSchema = z.object({
 });
 
 const portfolioSchema = z.object({
-  initialToken0: z.number().nonnegative(),
-  initialToken1: z.number().nonnegative(),
+  initialJusd: z.number().nonnegative(),
+  initialBtc: z.number().nonnegative(),
 }).optional();
 
 const poolConfigSchema = z.object({

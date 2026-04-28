@@ -32,7 +32,7 @@ pools:
         type: erc4626
         underlyingToken: '0x0987d3720d38847ac6dbb9d025b9de892a3ca35c'  # JUSD
     portfolio:
-      initialToken0: 100       # 100 JUSD
-      initialToken1: 0.0015    # 0.0015 cBTC
+      initialJusd: 100
+      initialBtc: 0.0015
     monitoring:
       checkIntervalSeconds: 30

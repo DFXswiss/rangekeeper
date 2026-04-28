@@ -58,15 +58,14 @@ let lastRefFetch = 0;
 // Portfolio history ring buffer (7 days at 30s intervals)
 export interface PortfolioSnapshot {
   time: number;
-  totalToken0: number; // total svJUSD (wallet + positions), raw units (divided by 1e18)
-  totalToken1: number; // total WCBTC (wallet + positions), raw units (divided by 1e18)
-  valueUsd: number;    // total USD value
+  jusd: number;    // total JUSD equivalent (svJUSD * vaultRate)
+  btc: number;     // total cBTC/WCBTC (1:1)
+  valueUsd: number;
 }
 
 export interface PortfolioConfig {
-  initialToken0: number;
-  initialToken1: number;
-  initialValueUsd: number;
+  initialJusd: number;
+  initialBtc: number;
   startTime: number;
 }
 
@@ -802,15 +801,12 @@ async function refreshPortfolio() {
 
     // Grid metrics
     var grid = document.getElementById('portfolio-grid');
-    var pnlToken0 = conf ? (last.totalToken0 - conf.initialToken0) : 0;
-    var pnlToken1 = conf ? (last.totalToken1 - conf.initialToken1) : 0;
-    var pnlUsd = conf ? (last.valueUsd - conf.initialValueUsd) : 0;
-    var pnlPct = conf && conf.initialValueUsd > 0 ? (pnlUsd / conf.initialValueUsd * 100) : 0;
+    var pnlJusd = conf ? (last.jusd - conf.initialJusd) : 0;
+    var pnlBtc = conf ? (last.btc - conf.initialBtc) : 0;
 
-    grid.innerHTML = '<div class="metric"><div class="label">svJUSD (total)</div><div class="value">' + last.totalToken0.toFixed(2) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlToken0 >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlToken0 >= 0 ? '+' : '') + pnlToken0.toFixed(2) + '</div>' : '') + '</div></div>' +
-      '<div class="metric"><div class="label">WCBTC (total)</div><div class="value">' + last.totalToken1.toFixed(8) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlToken1 >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlToken1 >= 0 ? '+' : '') + pnlToken1.toFixed(8) + '</div>' : '') + '</div></div>' +
-      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlUsd >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlUsd >= 0 ? '+' : '') + '$' + formatNumber(pnlUsd.toFixed(0)) + ' (' + pnlPct.toFixed(2) + '%)</div>' : '') + '</div></div>' +
-      '<div class="metric"><div class="label">P&L</div><div class="value ' + (pnlPct >= 0 ? 'ok' : 'error') + '">' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%</div></div>';
+    grid.innerHTML = '<div class="metric"><div class="label">JUSD (total)</div><div class="value">' + last.jusd.toFixed(2) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlJusd >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlJusd >= 0 ? '+' : '') + pnlJusd.toFixed(2) + '</div>' : '') + '</div></div>' +
+      '<div class="metric"><div class="label">BTC (total)</div><div class="value">' + last.btc.toFixed(8) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlBtc >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlBtc >= 0 ? '+' : '') + pnlBtc.toFixed(8) + '</div>' : '') + '</div></div>' +
+      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + '</div></div>';
 
     // Portfolio chart (token amounts over time)
     if (!portfolioChart) {
@@ -824,8 +820,8 @@ async function refreshPortfolio() {
         rightPriceScale: { borderColor: '#2a2a2a' },
         crosshair: { mode: 0 },
       });
-      token0Series = portfolioChart.addLineSeries({ color: '#4ade80', lineWidth: 1, title: 'svJUSD', priceScaleId: 'left' });
-      token1Series = portfolioChart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'WCBTC' });
+      token0Series = portfolioChart.addLineSeries({ color: '#4ade80', lineWidth: 1, title: 'JUSD', priceScaleId: 'left' });
+      token1Series = portfolioChart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'BTC' });
       portfolioChart.priceScale('left').applyOptions({ visible: true, borderColor: '#2a2a2a' });
     }
 
@@ -834,8 +830,8 @@ async function refreshPortfolio() {
     var stepP = hist.length > maxP ? Math.ceil(hist.length / maxP) : 1;
     var sampled = stepP === 1 ? hist : hist.filter(function(_, i) { return i % stepP === 0 || i === hist.length - 1; });
 
-    token0Series.setData(sampled.map(function(h) { return { time: h.time, value: h.totalToken0 }; }));
-    token1Series.setData(sampled.map(function(h) { return { time: h.time, value: h.totalToken1 }; }));
+    token0Series.setData(sampled.map(function(h) { return { time: h.time, value: h.jusd }; }));
+    token1Series.setData(sampled.map(function(h) { return { time: h.time, value: h.btc }; }));
     portfolioChart.timeScale().fitContent();
   } catch(e) { console.error('Portfolio error:', e); }
 }
