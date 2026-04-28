@@ -3,7 +3,7 @@ import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
 import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
 import { readFileSync, existsSync } from 'fs';
-import { updatePoolStatus, importPriceHistory, importBandEvents } from './health/health-server';
+import { updatePoolStatus, importPriceHistory, importBandEvents, setDataDir, loadPersistedData, startPersistTimer, persistNow } from './health/health-server';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -63,6 +63,11 @@ async function main(): Promise<void> {
   const stateStore = new StateStore(path.join(dataDir, 'state.json'));
   stateStoreRef = stateStore;
   const historyLogger = new HistoryLogger(path.join(dataDir, 'history.jsonl'));
+
+  // Health server data persistence (price history + band events survive restarts)
+  setDataDir(dataDir);
+  loadPersistedData();
+  startPersistTimer();
 
   // Load pool configs
   const pools = loadPoolConfigs();
@@ -276,6 +281,7 @@ function setupShutdownHandlers(): void {
     }
 
     stateStoreRef?.save();
+    persistNow();
     logger.info('All engines stopped, state persisted, exiting');
     process.exit(0);
   };
