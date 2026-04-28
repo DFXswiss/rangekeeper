@@ -259,6 +259,16 @@ export class RebalanceEngine {
       this.logger.info({ poolId: poolEntry.id }, 'RESET_BANDS: all bands closed, will re-mint on next price update');
     }
 
+    // Set portfolio initial from config (if not already set from persistence)
+    if (poolEntry.portfolio) {
+      setPortfolioInitial(poolEntry.id, {
+        initialToken0: poolEntry.portfolio.initialToken0,
+        initialToken1: poolEntry.portfolio.initialToken1,
+        initialValueUsd: 0, // calculated on first tracking
+        startTime: Math.floor(Date.now() / 1000),
+      });
+    }
+
     this.setState('MONITORING');
   }
 
