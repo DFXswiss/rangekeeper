@@ -126,10 +126,10 @@ function deepResolveEnvVars(obj: unknown, parentKey?: string): unknown {
 }
 
 export function loadPoolConfigs(configPath?: string): PoolEntry[] {
-  const defaultConfig = process.env.POOL_CONFIG
-    ? path.resolve(process.cwd(), 'config', process.env.POOL_CONFIG)
-    : path.resolve(process.cwd(), 'config', 'pools.yaml');
-  const filePath = configPath ?? defaultConfig;
+  if (!configPath && !process.env.POOL_CONFIG) {
+    throw new Error('POOL_CONFIG environment variable is required (e.g. pools.dev.yaml or pools.prd.yaml)');
+  }
+  const filePath = configPath ?? path.resolve(process.cwd(), 'config', process.env.POOL_CONFIG!);
   const raw = readFileSync(filePath, 'utf-8');
   const parsed = parse(raw);
   const resolved = deepResolveEnvVars(parsed);
