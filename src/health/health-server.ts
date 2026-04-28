@@ -101,11 +101,11 @@ export interface BandEvent {
 
 const bandEvents: Map<string, BandEvent[]> = new Map();
 
-export function recordBandOpen(poolId: string, tokenId: number, tickLower: number, tickUpper: number): void {
+export function recordBandOpen(poolId: string, tokenId: number, tickLower: number, tickUpper: number, openTime?: number): void {
   if (!bandEvents.has(poolId)) bandEvents.set(poolId, []);
   const events = bandEvents.get(poolId)!;
   if (!events.find((e) => e.tokenId === tokenId && e.closeTime === null)) {
-    events.push({ tokenId, tickLower, tickUpper, openTime: Math.floor(Date.now() / 1000), closeTime: null });
+    events.push({ tokenId, tickLower, tickUpper, openTime: openTime ?? Math.floor(Date.now() / 1000), closeTime: null });
   }
 }
 
@@ -515,13 +515,13 @@ function renderBandOverlays() {
 
     var div = document.createElement('div');
     div.className = 'band-overlay';
-    div.style.cssText = 'position:absolute;pointer-events:none;' +
+    div.style.cssText = 'position:absolute;pointer-events:none;z-index:1;' +
       'left:' + Math.min(xLeft, xRight) + 'px;' +
       'top:' + Math.min(yTop, yBottom) + 'px;' +
       'width:' + Math.abs(xRight - xLeft) + 'px;' +
-      'height:' + Math.abs(yBottom - yTop) + 'px;' +
+      'height:' + Math.max(Math.abs(yBottom - yTop), 2) + 'px;' +
       'background:' + (colors[idx % colors.length]) + ';' +
-      'border:1px solid rgba(255,255,255,0.1);';
+      'border:1px solid rgba(255,255,255,0.15);';
     container.appendChild(div);
   });
 }
