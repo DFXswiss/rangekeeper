@@ -33,6 +33,9 @@ export interface PoolStatus {
   token0Symbol?: string;
   token1Symbol?: string;
   vaultRate?: number;
+  rangeWidthPercent?: number;
+  feeTier?: number;
+  bandCount?: number;
 }
 
 const botStatus: BotStatus = {
@@ -395,6 +398,16 @@ function renderPool(pool) {
   html += '<div class="metric"><div class="label">Current Price</div><div class="value" id="pool-price-' + pool.id + '">-</div></div>';
   html += '</div>';
 
+  // Strategy config
+  if (pool.rangeWidthPercent || pool.feeTier) {
+    var bandWidth = pool.rangeWidthPercent && bandCount > 0 ? (pool.rangeWidthPercent * 2 / bandCount).toFixed(2) : '?';
+    html += '<div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:0.8rem;color:#888">';
+    if (pool.rangeWidthPercent) html += '<span>Total Range: &plusmn;' + pool.rangeWidthPercent + '%</span>';
+    html += '<span>Band Width: ~' + bandWidth + '% each</span>';
+    if (pool.feeTier) html += '<span>Fee Tier: ' + (pool.feeTier / 10000) + '%</span>';
+    html += '</div>';
+  }
+
   if (stopped && pool.emergencyReason) {
     html += '<div style="margin-top:12px;padding:10px;background:#7f1d1d;border-radius:4px;font-size:0.85rem">' + pool.emergencyReason + '</div>';
   }
@@ -422,8 +435,15 @@ function renderPool(pool) {
     html += '</tbody></table>';
   }
 
+  // Explanation
+  html += '<div style="margin-top:16px;padding:12px;background:#1a1a1a;border-radius:6px;font-size:0.8rem;color:#888;line-height:1.5">';
+  html += 'Liquidity is distributed across ' + bandCount + ' bands. The <span style="color:#4ade80">green</span> safe zone holds the active position. ';
+  html += 'When the price moves into a <span style="color:#eab308">yellow</span> trigger band, the bot rebalances by dissolving the opposite edge band and minting a new one in the direction of the price move. ';
+  html += '<span style="color:#ef4444">Red</span> buffer bands provide an additional safety margin before liquidity runs out.';
+  html += '</div>';
+
   // Links
-  html += '<div class="links" style="margin-top:16px">';
+  html += '<div class="links" style="margin-top:12px">';
   html += '<a href="' + explorerUrl(chainId, 'address', wallet) + '">Wallet on Explorer</a>';
   if (poolAddr) html += '<a href="' + poolUrl(chainId, poolAddr) + '">Pool on DEX</a>';
   if (poolAddr) html += '<a href="' + explorerUrl(chainId, 'address', poolAddr) + '">Pool Contract</a>';
