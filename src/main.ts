@@ -2,6 +2,8 @@ import path from 'path';
 import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
 import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
+import { readFileSync, existsSync } from 'fs';
+import { updatePoolStatus, importPriceHistory, importBandEvents, setDataDir, loadPersistedData, startPersistTimer, persistNow, getPriceHistory, getBandEvents } from './health/health-server';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -21,6 +23,7 @@ import { TelegramNotifier } from './notification/telegram-notifier';
 import { DiscordNotifier } from './notification/discord-notifier';
 import { GasOracle } from './chain/gas-oracle';
 import { NonceTracker } from './chain/nonce-tracker';
+import { TokenWrapper } from './chain/token-wrapper';
 import { startHealthServer, setDryRunMode } from './health/health-server';
 
 const engines: RebalanceEngine[] = [];
@@ -61,9 +64,59 @@ async function main(): Promise<void> {
   stateStoreRef = stateStore;
   const historyLogger = new HistoryLogger(path.join(dataDir, 'history.jsonl'));
 
+  // Health server data persistence (price history + band events survive restarts)
+  setDataDir(dataDir);
+  loadPersistedData();
+  startPersistTimer();
+
   // Load pool configs
   const pools = loadPoolConfigs();
   logger.info({ poolCount: pools.length }, 'Loaded pool configurations');
+
+  // Load seed data only if no persisted data exists for each type
+  const hasPersistedPrices = pools.some((p) => getPriceHistory(p.id).length > 0);
+  if (!hasPersistedPrices) {
+    const seedPaths = [
+      path.join(dataDir, 'price-history-seed.json'),
+      path.resolve(process.cwd(), 'data-seed', 'price-history-seed.json'),
+    ];
+    const seedPath = seedPaths.find((p) => existsSync(p));
+    if (seedPath) {
+      try {
+        const seedData = JSON.parse(readFileSync(seedPath, 'utf-8'));
+        for (const pool of pools) {
+          importPriceHistory(pool.id, seedData);
+        }
+        logger.info({ entries: seedData.length }, 'Loaded price history seed data');
+      } catch (err) {
+        logger.warn({ err }, 'Failed to load price history seed data');
+      }
+    }
+  } else {
+    logger.info('Skipping price history seed (persisted data loaded)');
+  }
+
+  const hasPersistedBands = pools.some((p) => getBandEvents(p.id).length > 0);
+  if (!hasPersistedBands) {
+    const bandSeedPaths = [
+      path.join(dataDir, 'band-events-seed.json'),
+      path.resolve(process.cwd(), 'data-seed', 'band-events-seed.json'),
+    ];
+    const bandSeedPath = bandSeedPaths.find((p) => existsSync(p));
+    if (bandSeedPath) {
+      try {
+        const bandSeedData = JSON.parse(readFileSync(bandSeedPath, 'utf-8'));
+        for (const pool of pools) {
+          importBandEvents(pool.id, bandSeedData);
+        }
+        logger.info({ entries: bandSeedData.length }, 'Loaded band events seed data');
+      } catch (err) {
+        logger.warn({ err }, 'Failed to load band events seed data');
+      }
+    }
+  } else {
+    logger.info('Skipping band events seed (persisted data loaded)');
+  }
 
   for (const poolEntry of pools) {
     try {
@@ -92,6 +145,14 @@ async function main(): Promise<void> {
       }
 
       logger.info({ poolId: poolEntry.id, poolAddress }, 'Pool resolved');
+
+      updatePoolStatus(poolEntry.id, {
+        walletAddress: wallet.address,
+        chainId: poolEntry.chain.chainId,
+        poolAddress,
+        token0Symbol: poolEntry.pool.token0.symbol,
+        token1Symbol: poolEntry.pool.token1.symbol,
+      });
 
       let poolContract = getPoolContract(poolAddress, wallet);
       const poolMonitor = new PoolMonitor(poolContract, poolEntry.id, poolEntry.monitoring.checkIntervalSeconds * 1000);
@@ -171,6 +232,19 @@ async function main(): Promise<void> {
         nonceTracker,
       };
 
+      // Wrap tokens (cBTC→WCBTC, JUSD→svJUSD) before engine starts
+      if (poolEntry.wrappers && poolEntry.wrappers.length > 0 && !env.DRY_RUN) {
+        if (nonceTracker) await nonceTracker.initialize();
+        const tokenWrapper = new TokenWrapper(() => wallet, nonceTracker);
+        for (const wrapConfig of poolEntry.wrappers) {
+          try {
+            await tokenWrapper.wrapIfNeeded(wrapConfig);
+          } catch (err) {
+            logger.warn({ poolId: poolEntry.id, wrapper: wrapConfig.wrappedToken, err }, 'Token wrapping failed (continuing)');
+          }
+        }
+      }
+
       const engine = new RebalanceEngine(ctx);
       engines.push(engine);
 
@@ -216,6 +290,7 @@ function setupShutdownHandlers(): void {
     }
 
     stateStoreRef?.save();
+    persistNow();
     logger.info('All engines stopped, state persisted, exiting');
     process.exit(0);
   };

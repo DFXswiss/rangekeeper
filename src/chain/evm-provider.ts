@@ -18,7 +18,7 @@ export class FailoverProvider {
     }
     this.rpcUrls = rpcUrls;
     this.maxConsecutiveErrors = maxConsecutiveErrors;
-    this.provider = new ethers.providers.JsonRpcProvider(rpcUrls[0]);
+    this.provider = createProvider(rpcUrls[0]);
   }
 
   getProvider(): providers.JsonRpcProvider {
@@ -55,7 +55,7 @@ export class FailoverProvider {
 
     this.currentIndex = nextIndex;
     const toUrl = this.rpcUrls[this.currentIndex];
-    this.provider = new ethers.providers.JsonRpcProvider(toUrl);
+    this.provider = createProvider(toUrl);
     this.consecutiveErrors = 0;
 
     this.logger.warn(
@@ -73,11 +73,37 @@ export class FailoverProvider {
 
 const providerCache = new Map<string, providers.JsonRpcProvider>();
 
+function createProvider(rpcUrl: string): providers.JsonRpcProvider {
+  const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+
+  // Override getFeeData to avoid ethers.js v5 hardcoded 1.5 gwei maxPriorityFeePerGas.
+  // On low-fee chains (e.g. Citrea, baseFee ~0.001 gwei) the default 1500x overpays.
+  // Use 2x baseFee as maxPriorityFeePerGas instead.
+  const originalGetFeeData = provider.getFeeData.bind(provider);
+  provider.getFeeData = async () => {
+    const block = await provider.getBlock('latest');
+    if (block?.baseFeePerGas) {
+      const baseFee = block.baseFeePerGas;
+      const priorityFee = baseFee.mul(2);
+      const maxFee = baseFee.mul(4).add(priorityFee);
+      return {
+        gasPrice: maxFee,
+        maxFeePerGas: maxFee,
+        maxPriorityFeePerGas: priorityFee,
+        lastBaseFeePerGas: baseFee,
+      } as ethers.providers.FeeData;
+    }
+    return originalGetFeeData();
+  };
+
+  return provider;
+}
+
 export function getProvider(rpcUrl: string): providers.JsonRpcProvider {
   const cached = providerCache.get(rpcUrl);
   if (cached) return cached;
 
-  const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+  const provider = createProvider(rpcUrl);
   providerCache.set(rpcUrl, provider);
   return provider;
 }

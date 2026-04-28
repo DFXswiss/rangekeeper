@@ -23,7 +23,13 @@ pools:
       minRebalanceIntervalMinutes: 30
       maxGasCostUsd: 5.0
       slippageTolerancePercent: 0.5
-      expectedPriceRatio: 1.0
-      depegThresholdPercent: 5.0
+      # No depeg detection — svJUSD/WCBTC is not a stablecoin pair
+    wrappers:
+      - wrappedToken: '0x3100000000000000000000000000000000000006'  # WCBTC
+        type: native
+        gasReserve: '100000000000000'  # 0.0001 cBTC reserved for gas
+      - wrappedToken: '0x1b70ae756b1089cc5948e4f8a2ad498df30e897d'  # svJUSD
+        type: erc4626
+        underlyingToken: '0x0987d3720d38847ac6dbb9d025b9de892a3ca35c'  # JUSD
     monitoring:
       checkIntervalSeconds: 30

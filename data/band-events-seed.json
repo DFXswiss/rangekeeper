@@ -1,0 +1,9 @@
+[
+  {"tokenId":522,"tickLower":-112500,"tickUpper":-112440,"openTime":1777317183,"closeTime":null},
+  {"tokenId":523,"tickLower":-112440,"tickUpper":-112380,"openTime":1777317187,"closeTime":null},
+  {"tokenId":524,"tickLower":-112380,"tickUpper":-112320,"openTime":1777317191,"closeTime":null},
+  {"tokenId":525,"tickLower":-112320,"tickUpper":-112260,"openTime":1777317195,"closeTime":null},
+  {"tokenId":526,"tickLower":-112260,"tickUpper":-112200,"openTime":1777317199,"closeTime":null},
+  {"tokenId":527,"tickLower":-112200,"tickUpper":-112140,"openTime":1777317205,"closeTime":null},
+  {"tokenId":528,"tickLower":-112140,"tickUpper":-112080,"openTime":1777317209,"closeTime":null}
+]

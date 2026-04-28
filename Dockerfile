@@ -22,6 +22,7 @@ COPY --from=builder /app/dist ./dist
 COPY config/ ./config/
 
 RUN mkdir -p /app/data
+COPY data/ ./data-seed/
 
 VOLUME ["/app/data"]
 

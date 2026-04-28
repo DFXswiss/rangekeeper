@@ -1,4 +1,4 @@
-import { BigNumber, providers, utils } from 'ethers';
+import { BigNumber, Contract, providers, utils } from 'ethers';
 import { getLogger } from '../util/logger';
 import { PoolMonitor, PoolState, PositionRange } from './pool-monitor';
 import { PositionManager, RemoveResult } from './position-manager';
@@ -11,7 +11,7 @@ import { BalanceTracker } from './balance-tracker';
 import { StateStore, RebalanceStage, BandState } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
-import { updatePoolStatus } from '../health/health-server';
+import { updatePoolStatus, recordPrice, recordBandOpen, recordBandClose, getBandEvents } from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
@@ -59,6 +59,8 @@ export class RebalanceEngine {
   private lastRebalanceTime = 0;
   private consecutiveErrors = 0;
   private rebalanceLock = false;
+  private vaultRate = 1;
+  private lastVaultRateFetch = 0;
 
   constructor(private readonly ctx: RebalanceContext) {}
 
@@ -229,6 +231,13 @@ export class RebalanceEngine {
       return;
     }
 
+    // Register existing bands in health server for chart overlays (only if not already loaded from persistence)
+    if (getBandEvents(poolEntry.id).length === 0) {
+      for (const band of this.bandManager.getBands()) {
+        recordBandOpen(poolEntry.id, band.tokenId.toNumber(), band.tickLower, band.tickUpper);
+      }
+    }
+
     // Ensure token approvals for both NFT manager and swap router
     await positionManager.approveTokens(pool.token0.address, pool.token1.address);
     await this.ctx.swapExecutor.approveTokens(pool.token0.address, pool.token1.address);
@@ -254,16 +263,36 @@ export class RebalanceEngine {
 
     const { poolEntry } = this.ctx;
 
+    const vaultRate = await this.fetchVaultRate();
+    recordPrice(poolEntry.id, poolState.tick, vaultRate).catch(() => {});
+
     updatePoolStatus(poolEntry.id, {
       state: this.state,
       currentTick: poolState.tick,
       activeBand: this.bandManager.getBandIndexForTick(poolState.tick),
-      bands: this.bandManager.getBands().map((b) => ({
-        index: b.index,
-        tokenId: b.tokenId.toNumber(),
-        tickLower: b.tickLower,
-        tickUpper: b.tickUpper,
-      })),
+      bands: this.bandManager.getBands().map((b) => {
+        const event = getBandEvents(poolEntry.id).find((e) => e.tokenId === b.tokenId.toNumber() && e.closeTime === null);
+        return {
+          index: b.index,
+          tokenId: b.tokenId.toNumber(),
+          tickLower: b.tickLower,
+          tickUpper: b.tickUpper,
+          amount0: event?.amount0,
+          amount1: event?.amount1,
+          liquidity: event?.liquidity,
+        };
+      }),
+      consecutiveErrors: this.consecutiveErrors,
+      emergencyStopped: this.ctx.emergencyStop.isStopped(),
+      emergencyReason: this.ctx.emergencyStop.isStopped() ? this.ctx.emergencyStop.getReason() : undefined,
+      walletAddress: this.ctx.wallet.address,
+      chainId: poolEntry.chain.chainId,
+      token0Symbol: poolEntry.pool.token0.symbol,
+      token1Symbol: poolEntry.pool.token1.symbol,
+      vaultRate,
+      rangeWidthPercent: poolEntry.strategy.rangeWidthPercent,
+      feeTier: poolEntry.pool.feeTier,
+      bandCount: this.bandManager.getBandCount(),
     });
 
     // Check depeg
@@ -501,6 +530,11 @@ export class RebalanceEngine {
           tickLower: bandConfig.tickLower,
           tickUpper: bandConfig.tickUpper,
         });
+        recordBandOpen(poolEntry.id, result.tokenId.toNumber(), bandConfig.tickLower, bandConfig.tickUpper, undefined, {
+          amount0: result.amount0.toString(),
+          amount1: result.amount1.toString(),
+          liquidity: result.liquidity.toString(),
+        });
       }
 
       this.bandManager.setBands(bands, layout.bandTickWidth);
@@ -590,6 +624,7 @@ export class RebalanceEngine {
       }
 
       this.bandManager.removeBand(bandToDissolve.tokenId);
+      recordBandClose(poolEntry.id, bandToDissolve.tokenId.toNumber());
 
       // Checkpoint: band dissolved, funds in wallet
       this.persistCheckpoint(
@@ -686,6 +721,11 @@ export class RebalanceEngine {
         { tokenId: mintResult.tokenId, tickLower: newBandTicks.tickLower, tickUpper: newBandTicks.tickUpper },
         direction === 'lower' ? 'start' : 'end',
       );
+      recordBandOpen(poolEntry.id, mintResult.tokenId.toNumber(), newBandTicks.tickLower, newBandTicks.tickUpper, undefined, {
+        amount0: mintResult.amount0.toString(),
+        amount1: mintResult.amount1.toString(),
+        liquidity: mintResult.liquidity.toString(),
+      });
 
       this.lastRebalanceTime = Date.now();
       this.consecutiveErrors = 0;
@@ -746,6 +786,29 @@ export class RebalanceEngine {
     this.setState('STOPPED');
     this.ctx.poolMonitor.stopMonitoring();
     this.logger.info({ poolId: this.ctx.poolEntry.id }, 'Rebalance engine stopped');
+  }
+
+  private async fetchVaultRate(): Promise<number> {
+    const now = Date.now();
+    if (now - this.lastVaultRateFetch < 300_000) return this.vaultRate;
+
+    const vaultWrapper = this.ctx.poolEntry.wrappers?.find((w) => w.type === 'erc4626');
+    if (!vaultWrapper) return 1;
+
+    try {
+      const vault = new Contract(
+        vaultWrapper.wrappedToken,
+        ['function convertToAssets(uint256 shares) view returns (uint256)'],
+        this.ctx.wallet,
+      );
+      const oneShare = BigNumber.from(10).pow(18);
+      const assets: BigNumber = await vault.convertToAssets(oneShare);
+      this.vaultRate = parseFloat(utils.formatUnits(assets, 18));
+      this.lastVaultRateFetch = now;
+    } catch (err) {
+      this.logger.warn({ err }, 'Failed to fetch vault rate');
+    }
+    return this.vaultRate;
   }
 
   private setState(newState: RebalanceState): void {
