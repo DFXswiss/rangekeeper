@@ -854,10 +854,13 @@ async function refreshPortfolio() {
     var grid = document.getElementById('portfolio-grid');
     var pnlJusd = conf ? (last.jusd - conf.initialJusd) : 0;
     var pnlBtc = conf ? (last.btc - conf.initialBtc) : 0;
+    var firstValue = hist[0].valueUsd;
+    var pnlValue = last.valueUsd - firstValue;
+    var pnlValuePct = firstValue > 0 ? (pnlValue / firstValue * 100) : 0;
 
     grid.innerHTML = '<div class="metric"><div class="label">JUSD (total)</div><div class="value">' + last.jusd.toFixed(2) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlJusd >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlJusd >= 0 ? '+' : '') + pnlJusd.toFixed(2) + '</div>' : '') + '</div></div>' +
       '<div class="metric"><div class="label">BTC (total)</div><div class="value">' + last.btc.toFixed(8) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlBtc >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlBtc >= 0 ? '+' : '') + pnlBtc.toFixed(8) + '</div>' : '') + '</div></div>' +
-      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + '</div></div>';
+      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + '<div style="font-size:0.7rem;color:' + (pnlValue >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlValue >= 0 ? '+' : '') + '$' + formatNumber(pnlValue.toFixed(2)) + ' (' + (pnlValuePct >= 0 ? '+' : '') + pnlValuePct.toFixed(2) + '%)</div></div></div>';
 
     // Portfolio chart (token amounts over time)
     if (!portfolioChart) {
