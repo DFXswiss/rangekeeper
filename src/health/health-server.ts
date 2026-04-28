@@ -420,12 +420,17 @@ function renderPool(pool) {
   html += '<div class="metric"><div class="label">Current Price</div><div class="value" id="pool-price-' + pool.id + '">-</div></div>';
   html += '</div>';
 
-  // Strategy config
-  if (pool.rangeWidthPercent || pool.feeTier) {
-    var bandWidth = pool.rangeWidthPercent && bandCount > 0 ? (pool.rangeWidthPercent * 2 / bandCount).toFixed(2) : '?';
+  // Strategy config — calculate actual values from band ticks
+  if (bandCount > 0 && pool.bands && pool.bands.length > 0) {
+    var lowestTick = pool.bands[0].tickLower;
+    var highestTick = pool.bands[bandCount - 1].tickUpper;
+    var totalTicks = highestTick - lowestTick;
+    var actualTotalPct = (Math.pow(1.0001, totalTicks) - 1) * 100;
+    var bandTicks = pool.bands[0].tickUpper - pool.bands[0].tickLower;
+    var actualBandPct = (Math.pow(1.0001, bandTicks) - 1) * 100;
     html += '<div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:0.8rem;color:#888">';
-    if (pool.rangeWidthPercent) html += '<span>Total Range: &plusmn;' + pool.rangeWidthPercent + '%</span>';
-    html += '<span>Band Width: ~' + bandWidth + '% each</span>';
+    html += '<span>Total Range: ' + actualTotalPct.toFixed(1) + '%</span>';
+    html += '<span>Band Width: ' + actualBandPct.toFixed(2) + '% each</span>';
     if (pool.feeTier) html += '<span>Fee Tier: ' + (pool.feeTier / 10000) + '%</span>';
     html += '</div>';
   }
