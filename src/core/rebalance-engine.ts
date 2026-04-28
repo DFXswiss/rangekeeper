@@ -231,6 +231,11 @@ export class RebalanceEngine {
       return;
     }
 
+    // Register existing bands in health server for chart overlays
+    for (const band of this.bandManager.getBands()) {
+      recordBandOpen(poolEntry.id, band.tokenId.toNumber(), band.tickLower, band.tickUpper);
+    }
+
     // Ensure token approvals for both NFT manager and swap router
     await positionManager.approveTokens(pool.token0.address, pool.token1.address);
     await this.ctx.swapExecutor.approveTokens(pool.token0.address, pool.token1.address);
