@@ -284,6 +284,9 @@ export class RebalanceEngine {
       token0Symbol: poolEntry.pool.token0.symbol,
       token1Symbol: poolEntry.pool.token1.symbol,
       vaultRate,
+      rangeWidthPercent: poolEntry.strategy.rangeWidthPercent,
+      feeTier: poolEntry.pool.feeTier,
+      bandCount: this.bandManager.getBandCount(),
     });
 
     // Check depeg
