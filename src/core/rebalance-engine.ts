@@ -11,12 +11,12 @@ import { BalanceTracker } from './balance-tracker';
 import { StateStore, RebalanceStage, BandState } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
-import { updatePoolStatus, recordPrice, recordBandOpen, recordBandClose, getBandEvents } from '../health/health-server';
+import { updatePoolStatus, recordPrice, recordBandOpen, recordBandClose, getBandEvents, recordPortfolio, setPortfolioInitial } from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
 import { NonceTracker } from '../chain/nonce-tracker';
-import { tickToAdjustedPrice } from '../util/tick-math';
+import { tickToAdjustedPrice, getAmountsFromLiquidity } from '../util/tick-math';
 import { Wallet } from 'ethers';
 import { BandManager, Band, TriggerDirection } from './band-manager';
 
@@ -61,6 +61,8 @@ export class RebalanceEngine {
   private rebalanceLock = false;
   private vaultRate = 1;
   private lastVaultRateFetch = 0;
+  private cachedLiquidity: Map<string, number> = new Map();
+  private lastLiquidityFetch = 0;
 
   constructor(private readonly ctx: RebalanceContext) {}
 
@@ -242,6 +244,30 @@ export class RebalanceEngine {
     await positionManager.approveTokens(pool.token0.address, pool.token1.address);
     await this.ctx.swapExecutor.approveTokens(pool.token0.address, pool.token1.address);
 
+    // RESET_BANDS: close all existing bands and let the bot re-mint with current config
+    if (process.env.RESET_BANDS === 'true' && this.bandManager.getBandCount() > 0) {
+      this.logger.warn({ poolId: poolEntry.id }, 'RESET_BANDS: closing all bands');
+      const bandsToClose = [...this.bandManager.getBands()];
+      for (const band of bandsToClose) {
+        recordBandClose(poolEntry.id, band.tokenId.toNumber());
+      }
+      await this.emergencyWithdraw();
+      // Reset emergency state so the bot can re-mint
+      this.ctx.emergencyStop.reset();
+      this.state = 'IDLE';
+      await notifier.notify(`RESET_BANDS: All bands closed for ${poolEntry.id}, will re-mint with new config`);
+      this.logger.info({ poolId: poolEntry.id }, 'RESET_BANDS: all bands closed, will re-mint on next price update');
+    }
+
+    // Set portfolio initial from config (if not already set from persistence)
+    if (poolEntry.portfolio) {
+      setPortfolioInitial(poolEntry.id, {
+        initialJusd: poolEntry.portfolio.initialJusd,
+        initialBtc: poolEntry.portfolio.initialBtc,
+        startTime: Math.floor(Date.now() / 1000),
+      });
+    }
+
     this.setState('MONITORING');
   }
 
@@ -294,6 +320,9 @@ export class RebalanceEngine {
       feeTier: poolEntry.pool.feeTier,
       bandCount: this.bandManager.getBandCount(),
     });
+
+    // Portfolio tracking
+    this.trackPortfolio(poolEntry, poolState, vaultRate).catch(() => {});
 
     // Check depeg
     if (await this.checkDepeg(poolState)) return;
@@ -557,6 +586,13 @@ export class RebalanceEngine {
       balanceTracker.setInitialValue(initialValue);
       this.logger.info({ initialValueUsd: initialValue.toFixed(2) }, 'Initial portfolio value set');
 
+      // Record initial investment for portfolio tracking (convert svJUSD to JUSD)
+      setPortfolioInitial(poolEntry.id, {
+        initialJusd: bal0 * this.vaultRate,
+        initialBtc: bal1,
+        startTime: Math.floor(Date.now() / 1000),
+      });
+
       this.persistState(stateStore, poolEntry.id);
       historyLogger.log({
         type: OperationType.MINT,
@@ -786,6 +822,66 @@ export class RebalanceEngine {
     this.setState('STOPPED');
     this.ctx.poolMonitor.stopMonitoring();
     this.logger.info({ poolId: this.ctx.poolEntry.id }, 'Rebalance engine stopped');
+  }
+
+  private async trackPortfolio(poolEntry: PoolEntry, poolState: PoolState, vaultRate: number): Promise<void> {
+    const { pool } = poolEntry;
+    const wallet = this.ctx.wallet;
+
+    try {
+      // Refresh liquidity cache every 5 min (avoid excessive RPC calls)
+      const now = Date.now();
+      if (now - this.lastLiquidityFetch > 300_000) {
+        this.lastLiquidityFetch = now;
+        for (const band of this.bandManager.getBands()) {
+          try {
+            const pos = await this.ctx.positionManager.getPosition(band.tokenId);
+            this.cachedLiquidity.set(band.tokenId.toString(), parseFloat(pos.liquidity.toString()));
+          } catch {
+            // keep previous value
+          }
+        }
+      }
+
+      // Wallet balances
+      const token0Contract = getErc20Contract(pool.token0.address, wallet);
+      const token1Contract = getErc20Contract(pool.token1.address, wallet);
+      const [walletBal0, walletBal1] = await Promise.all([
+        token0Contract.balanceOf(wallet.address),
+        token1Contract.balanceOf(wallet.address),
+      ]);
+
+      let totalAmount0 = parseFloat(utils.formatUnits(walletBal0, pool.token0.decimals));
+      let totalAmount1 = parseFloat(utils.formatUnits(walletBal1, pool.token1.decimals));
+
+      // Position amounts (calculated from cached liquidity + current tick)
+      for (const band of this.bandManager.getBands()) {
+        const liq = this.cachedLiquidity.get(band.tokenId.toString()) ?? 0;
+        if (liq > 0) {
+          const amounts = getAmountsFromLiquidity(liq, poolState.tick, band.tickLower, band.tickUpper);
+          totalAmount0 += amounts.amount0 / Math.pow(10, pool.token0.decimals);
+          totalAmount1 += amounts.amount1 / Math.pow(10, pool.token1.decimals);
+        }
+      }
+
+      // Convert to JUSD + cBTC: svJUSD * vaultRate = JUSD, WCBTC = cBTC (1:1)
+      const totalJusd = totalAmount0 * vaultRate;
+      const totalBtc = totalAmount1;
+
+      // USD value
+      const rawPrice = Math.pow(1.0001, poolState.tick);
+      const btcPriceUsd = (rawPrice < 0.01 ? 1 / rawPrice : rawPrice) * vaultRate;
+      const valueUsd = totalJusd + totalBtc * btcPriceUsd;
+
+      recordPortfolio(poolEntry.id, {
+        time: Math.floor(Date.now() / 1000),
+        jusd: totalJusd,
+        btc: totalBtc,
+        valueUsd,
+      });
+    } catch (err) {
+      this.logger.warn({ err }, 'Failed to track portfolio');
+    }
   }
 
   private async fetchVaultRate(): Promise<number> {

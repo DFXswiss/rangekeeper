@@ -55,6 +55,44 @@ const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: num
 let cachedRefPrice: number | null = null;
 let lastRefFetch = 0;
 
+// Portfolio history ring buffer (7 days at 30s intervals)
+export interface PortfolioSnapshot {
+  time: number;
+  jusd: number;    // total JUSD equivalent (svJUSD * vaultRate)
+  btc: number;     // total cBTC/WCBTC (1:1)
+  valueUsd: number;
+}
+
+export interface PortfolioConfig {
+  initialJusd: number;
+  initialBtc: number;
+  startTime: number;
+}
+
+const portfolioHistory: Map<string, PortfolioSnapshot[]> = new Map();
+const portfolioConfig: Map<string, PortfolioConfig> = new Map();
+
+export function recordPortfolio(poolId: string, snapshot: PortfolioSnapshot): void {
+  if (!portfolioHistory.has(poolId)) portfolioHistory.set(poolId, []);
+  const history = portfolioHistory.get(poolId)!;
+  history.push(snapshot);
+  if (history.length > MAX_HISTORY) history.shift();
+}
+
+export function setPortfolioInitial(poolId: string, config: PortfolioConfig): void {
+  if (!portfolioConfig.has(poolId)) {
+    portfolioConfig.set(poolId, config);
+  }
+}
+
+export function getPortfolioHistory(poolId: string): PortfolioSnapshot[] {
+  return portfolioHistory.get(poolId) ?? [];
+}
+
+export function getPortfolioConfig(poolId: string): PortfolioConfig | undefined {
+  return portfolioConfig.get(poolId);
+}
+
 async function fetchRefPrice(): Promise<void> {
   if (Date.now() - lastRefFetch < 60_000) return;
   lastRefFetch = Date.now();
@@ -179,6 +217,27 @@ export function loadPersistedData(): void {
     }
   }
 
+  const portPath = dataDir + '/portfolio-history.json';
+  if (existsSync(portPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(portPath, 'utf-8'));
+      if (raw.history) {
+        for (const [poolId, entries] of Object.entries(raw.history)) {
+          const existing = portfolioHistory.get(poolId) ?? [];
+          portfolioHistory.set(poolId, [...(entries as PortfolioSnapshot[]), ...existing]);
+        }
+      }
+      if (raw.config) {
+        for (const [poolId, config] of Object.entries(raw.config)) {
+          portfolioConfig.set(poolId, config as PortfolioConfig);
+        }
+      }
+      logger.info({ path: portPath }, 'Loaded persisted portfolio history');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load persisted portfolio history');
+    }
+  }
+
   const bandPath = dataDir + '/band-events.json';
   if (existsSync(bandPath)) {
     try {
@@ -207,6 +266,16 @@ function persistData(): void {
       bandObj[poolId] = entries;
     }
     writeFileSync(dataDir + '/band-events.json', JSON.stringify(bandObj));
+
+    const portObj: Record<string, unknown> = {};
+    for (const [poolId, entries] of portfolioHistory.entries()) {
+      portObj[poolId] = entries;
+    }
+    const portConfObj: Record<string, unknown> = {};
+    for (const [poolId, config] of portfolioConfig.entries()) {
+      portConfObj[poolId] = config;
+    }
+    writeFileSync(dataDir + '/portfolio-history.json', JSON.stringify({ history: portObj, config: portConfObj }));
   } catch {
     // non-critical, will retry next interval
   }
@@ -260,6 +329,13 @@ export function startHealthServer(port: number): void {
 
   app.get('/api/bands/:poolId', (req, res) => {
     res.json(getBandEvents(req.params.poolId));
+  });
+
+  app.get('/api/portfolio/:poolId', (req, res) => {
+    res.json({
+      config: getPortfolioConfig(req.params.poolId),
+      history: getPortfolioHistory(req.params.poolId),
+    });
   });
 
   app.get('/dashboard', (_req, res) => {
@@ -316,7 +392,7 @@ function getDashboardHtml(): string {
 <body>
 <div style="display:flex;align-items:center;justify-content:space-between">
 <div><h1>RangeKeeper</h1><p class="subtitle">Autonomous Uniswap V3 Liquidity Provisioning</p></div>
-<a href="https://github.com/DFXswiss/rangekeeper" style="color:#888;text-decoration:none" title="GitHub"><svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+<a href="https://github.com/DFXswiss/rangekeeper" target="_blank" rel="noopener" style="color:#888;text-decoration:none" title="GitHub"><svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
 </div>
 
 <div id="error-banner"></div>
@@ -335,6 +411,12 @@ function getDashboardHtml(): string {
 
 <div id="pools-container"></div>
 
+</div>
+
+<div class="card" id="portfolio-card" style="display:none">
+  <h2>Portfolio</h2>
+  <div class="grid" id="portfolio-grid"></div>
+  <div id="portfolio-chart-container" style="height:200px;position:relative;overflow:hidden;margin-top:12px"></div>
 </div>
 
 <div class="card" id="chart-card" style="display:none">
@@ -420,12 +502,17 @@ function renderPool(pool) {
   html += '<div class="metric"><div class="label">Current Price</div><div class="value" id="pool-price-' + pool.id + '">-</div></div>';
   html += '</div>';
 
-  // Strategy config
-  if (pool.rangeWidthPercent || pool.feeTier) {
-    var bandWidth = pool.rangeWidthPercent && bandCount > 0 ? (pool.rangeWidthPercent * 2 / bandCount).toFixed(2) : '?';
+  // Strategy config — calculate actual values from band ticks
+  if (bandCount > 0 && pool.bands && pool.bands.length > 0) {
+    var lowestTick = pool.bands[0].tickLower;
+    var highestTick = pool.bands[bandCount - 1].tickUpper;
+    var totalTicks = highestTick - lowestTick;
+    var actualTotalPct = (Math.pow(1.0001, totalTicks) - 1) * 100;
+    var bandTicks = pool.bands[0].tickUpper - pool.bands[0].tickLower;
+    var actualBandPct = (Math.pow(1.0001, bandTicks) - 1) * 100;
     html += '<div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:0.8rem;color:#888">';
-    if (pool.rangeWidthPercent) html += '<span>Total Range: &plusmn;' + pool.rangeWidthPercent + '%</span>';
-    html += '<span>Band Width: ~' + bandWidth + '% each</span>';
+    html += '<span>Total Range: ' + actualTotalPct.toFixed(1) + '%</span>';
+    html += '<span>Band Width: ' + actualBandPct.toFixed(2) + '% each</span>';
     if (pool.feeTier) html += '<span>Fee Tier: ' + (pool.feeTier / 10000) + '%</span>';
     html += '</div>';
   }
@@ -474,9 +561,9 @@ function renderPool(pool) {
 
   // Links
   html += '<div class="links" style="margin-top:12px">';
-  html += '<a href="' + explorerUrl(chainId, 'address', wallet) + '">Wallet on Explorer</a>';
-  if (poolAddr) html += '<a href="' + poolUrl(chainId, poolAddr) + '">Pool on DEX</a>';
-  if (poolAddr) html += '<a href="' + explorerUrl(chainId, 'address', poolAddr) + '">Pool Contract</a>';
+  html += '<a href="' + explorerUrl(chainId, 'address', wallet) + '" target="_blank" rel="noopener">Wallet on Explorer</a>';
+  if (poolAddr) html += '<a href="' + poolUrl(chainId, poolAddr) + '" target="_blank" rel="noopener">Pool on DEX</a>';
+  if (poolAddr) html += '<a href="' + explorerUrl(chainId, 'address', poolAddr) + '" target="_blank" rel="noopener">Pool Contract</a>';
   html += '</div>';
 
   html += '</div>';
@@ -694,6 +781,63 @@ function renderBandOverlays() {
 
 refreshChart();
 setInterval(refreshChart, 60000);
+
+// Portfolio tracking
+var portfolioChart = null;
+var token0Series = null;
+var token1Series = null;
+
+async function refreshPortfolio() {
+  try {
+    var poolId = 'svjusd-wcbtc-citrea';
+    var res = await fetch('/api/portfolio/' + poolId);
+    var data = await res.json();
+    if (!data.history || data.history.length < 2) return;
+
+    document.getElementById('portfolio-card').style.display = 'block';
+    var hist = data.history;
+    var conf = data.config;
+    var last = hist[hist.length - 1];
+
+    // Grid metrics
+    var grid = document.getElementById('portfolio-grid');
+    var pnlJusd = conf ? (last.jusd - conf.initialJusd) : 0;
+    var pnlBtc = conf ? (last.btc - conf.initialBtc) : 0;
+
+    grid.innerHTML = '<div class="metric"><div class="label">JUSD (total)</div><div class="value">' + last.jusd.toFixed(2) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlJusd >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlJusd >= 0 ? '+' : '') + pnlJusd.toFixed(2) + '</div>' : '') + '</div></div>' +
+      '<div class="metric"><div class="label">BTC (total)</div><div class="value">' + last.btc.toFixed(8) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlBtc >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlBtc >= 0 ? '+' : '') + pnlBtc.toFixed(8) + '</div>' : '') + '</div></div>' +
+      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + '</div></div>';
+
+    // Portfolio chart (token amounts over time)
+    if (!portfolioChart) {
+      var LWC = window.LightweightCharts || window.lwc;
+      if (!LWC) return;
+      var container = document.getElementById('portfolio-chart-container');
+      portfolioChart = LWC.createChart(container, {
+        layout: { background: { color: '#161616' }, textColor: '#888' },
+        grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+        timeScale: { timeVisible: true, secondsVisible: false },
+        rightPriceScale: { borderColor: '#2a2a2a' },
+        crosshair: { mode: 0 },
+      });
+      token0Series = portfolioChart.addLineSeries({ color: '#4ade80', lineWidth: 1, title: 'JUSD', priceScaleId: 'left' });
+      token1Series = portfolioChart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'BTC' });
+      portfolioChart.priceScale('left').applyOptions({ visible: true, borderColor: '#2a2a2a' });
+    }
+
+    // Downsample
+    var maxP = 1500;
+    var stepP = hist.length > maxP ? Math.ceil(hist.length / maxP) : 1;
+    var sampled = stepP === 1 ? hist : hist.filter(function(_, i) { return i % stepP === 0 || i === hist.length - 1; });
+
+    token0Series.setData(sampled.map(function(h) { return { time: h.time, value: h.jusd }; }));
+    token1Series.setData(sampled.map(function(h) { return { time: h.time, value: h.btc }; }));
+    portfolioChart.timeScale().fitContent();
+  } catch(e) { console.error('Portfolio error:', e); }
+}
+
+refreshPortfolio();
+setInterval(refreshPortfolio, 30000);
 </script>
 </body>
 </html>`;

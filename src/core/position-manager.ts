@@ -143,8 +143,7 @@ export class PositionManager {
       'mint',
     );
 
-    const receipt = await tx.wait();
-    this.nonceTracker?.confirmNonce();
+    const receipt = await this.waitAndConfirmNonce(tx);
     if (receipt.status === 0) {
       throw new Error('Mint transaction reverted on-chain');
     }
@@ -216,8 +215,7 @@ export class PositionManager {
         ),
       'decreaseLiquidity',
     );
-    const decreaseReceipt = await decreaseTx.wait();
-    this.nonceTracker?.confirmNonce();
+    const decreaseReceipt = await this.waitAndConfirmNonce(decreaseTx);
     if (decreaseReceipt.status === 0) {
       throw new Error('decreaseLiquidity transaction reverted on-chain');
     }
@@ -247,8 +245,7 @@ export class PositionManager {
         'collect',
         { maxRetries: 5, baseDelayMs: 2000, maxDelayMs: 30000 },
       );
-      collectReceipt = await collectTx.wait();
-      this.nonceTracker?.confirmNonce();
+      collectReceipt = await this.waitAndConfirmNonce(collectTx);
       if (collectReceipt.status === 0) {
         throw new Error('collect transaction reverted on-chain');
       }
@@ -273,8 +270,7 @@ export class PositionManager {
     // Step 3: Burn the NFT
     const burnNonce = this.nonceTracker ? { nonce: this.nonceTracker.getNextNonce() } : {};
     const burnTx: ContractTransaction = await withRetry(() => nftManager.burn(tokenId, burnNonce), 'burn');
-    const burnReceipt = await burnTx.wait();
-    this.nonceTracker?.confirmNonce();
+    const burnReceipt = await this.waitAndConfirmNonce(burnTx);
     if (burnReceipt.status === 0) {
       throw new Error('burn transaction reverted on-chain');
     }
@@ -303,6 +299,20 @@ export class PositionManager {
     );
 
     return result;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async waitAndConfirmNonce(tx: ContractTransaction): Promise<any> {
+    try {
+      const receipt = await tx.wait();
+      this.nonceTracker?.confirmNonce();
+      return receipt;
+    } catch (err) {
+      if (this.nonceTracker) {
+        await this.nonceTracker.syncOnFailover();
+      }
+      throw err;
+    }
   }
 
   async getPosition(tokenId: BigNumber): Promise<PositionInfo> {
