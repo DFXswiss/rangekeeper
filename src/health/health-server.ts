@@ -14,6 +14,9 @@ export interface BandStatus {
   tokenId?: number;
   tickLower?: number;
   tickUpper?: number;
+  amount0?: string;
+  amount1?: string;
+  liquidity?: string;
 }
 
 export interface PoolStatus {
@@ -101,15 +104,34 @@ export interface BandEvent {
   tickUpper: number;
   openTime: number;
   closeTime: number | null;
+  amount0?: string;
+  amount1?: string;
+  liquidity?: string;
 }
 
 const bandEvents: Map<string, BandEvent[]> = new Map();
 
-export function recordBandOpen(poolId: string, tokenId: number, tickLower: number, tickUpper: number, openTime?: number): void {
+export function recordBandOpen(
+  poolId: string,
+  tokenId: number,
+  tickLower: number,
+  tickUpper: number,
+  openTime?: number,
+  amounts?: { amount0: string; amount1: string; liquidity: string },
+): void {
   if (!bandEvents.has(poolId)) bandEvents.set(poolId, []);
   const events = bandEvents.get(poolId)!;
   if (!events.find((e) => e.tokenId === tokenId && e.closeTime === null)) {
-    events.push({ tokenId, tickLower, tickUpper, openTime: openTime ?? Math.floor(Date.now() / 1000), closeTime: null });
+    events.push({
+      tokenId,
+      tickLower,
+      tickUpper,
+      openTime: openTime ?? Math.floor(Date.now() / 1000),
+      closeTime: null,
+      amount0: amounts?.amount0,
+      amount1: amounts?.amount1,
+      liquidity: amounts?.liquidity,
+    });
   }
 }
 
@@ -416,7 +438,10 @@ function renderPool(pool) {
   if (bandCount > 0) {
     const priceLabel = formatPriceLabel(pool);
     var vr = pool.vaultRate || 1;
-    html += '<table style="margin-top:16px"><thead><tr><th>Band</th><th>Zone</th><th></th><th>Price Range (' + priceLabel + ' in USD)</th><th class="muted">Tick Range</th></tr></thead><tbody>';
+    var hasLiquidity = pool.bands.some(function(b) { return b.amount0 || b.amount1; });
+    html += '<table style="margin-top:16px"><thead><tr><th>Band</th><th>Zone</th><th></th><th>Price Range (' + priceLabel + ' in USD)</th>';
+    if (hasLiquidity) html += '<th>' + (pool.token0Symbol || 'Token0') + '</th><th>' + (pool.token1Symbol || 'Token1') + '</th>';
+    html += '<th class="muted">Tick Range</th></tr></thead><tbody>';
     for (let ri = 0; ri < bandCount; ri++) {
       const b = pool.bands[ri];
       const isActive = ri === pool.activeBand;
@@ -429,6 +454,11 @@ function renderPool(pool) {
       html += '<td>' + (ri + 1) + '</td><td>' + ZONE_LABELS[ri] + '</td>';
       html += '<td><div class="band-cell ' + ZONE_CLASSES[ri] + (isActive ? ' active' : '') + '"></div></td>';
       html += '<td>' + priceLow + ' — ' + priceHigh + '</td>';
+      if (hasLiquidity) {
+        var a0 = b.amount0 ? (parseFloat(b.amount0) / 1e18).toFixed(4) : '-';
+        var a1 = b.amount1 ? (parseFloat(b.amount1) / 1e18).toFixed(8) : '-';
+        html += '<td>' + a0 + '</td><td>' + a1 + '</td>';
+      }
       html += '<td class="muted">[' + b.tickLower + ', ' + b.tickUpper + ']</td>';
       html += '</tr>';
     }
