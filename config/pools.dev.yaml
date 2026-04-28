@@ -1,0 +1,35 @@
+pools:
+  - id: 'svjusd-wcbtc-citrea'
+    chain:
+      name: 'citrea'
+      chainId: 4114
+      rpcUrl: '${CITREA_RPC_URL}'
+      backupRpcUrls: []
+    pool:
+      token0:
+        address: '0x1b70ae756b1089cc5948e4f8a2ad498df30e897d'
+        symbol: 'svJUSD'
+        decimals: 18
+      token1:
+        address: '0x3100000000000000000000000000000000000006'
+        symbol: 'WCBTC'
+        decimals: 18
+      feeTier: 3000
+      nftManagerAddress: '0x3D3821D358f56395d4053954f98aec0E1F0fa568'
+      swapRouterAddress: '0x565eD3D57fe40f78A46f348C220121AE093c3cF8'
+    strategy:
+      rangeWidthPercent: 3.0
+      rebalanceThresholdPercent: 80
+      minRebalanceIntervalMinutes: 30
+      maxGasCostUsd: 5.0
+      slippageTolerancePercent: 0.5
+      # No depeg detection — svJUSD/WCBTC is not a stablecoin pair
+    wrappers:
+      - wrappedToken: '0x3100000000000000000000000000000000000006'  # WCBTC
+        type: native
+        gasReserve: '100000000000000'  # 0.0001 cBTC reserved for gas
+      - wrappedToken: '0x1b70ae756b1089cc5948e4f8a2ad498df30e897d'  # svJUSD
+        type: erc4626
+        underlyingToken: '0x0987d3720d38847ac6dbb9d025b9de892a3ca35c'  # JUSD
+    monitoring:
+      checkIntervalSeconds: 30
