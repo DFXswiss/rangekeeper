@@ -1,4 +1,5 @@
 import express from 'express';
+import { writeFileSync, readFileSync, existsSync } from 'fs';
 import { getLogger } from '../util/logger';
 
 export interface BotStatus {
@@ -123,6 +124,73 @@ export function importBandEvents(poolId: string, data: BandEvent[]): void {
 
 export function getBandEvents(poolId: string): BandEvent[] {
   return bandEvents.get(poolId) ?? [];
+}
+
+// --- Persistence: save/load price history and band events to disk ---
+let dataDir = '';
+let persistTimer: ReturnType<typeof setInterval> | null = null;
+
+export function setDataDir(dir: string): void {
+  dataDir = dir;
+}
+
+export function loadPersistedData(): void {
+  if (!dataDir) return;
+  const logger = getLogger();
+
+  const pricePath = dataDir + '/price-history.json';
+  if (existsSync(pricePath)) {
+    try {
+      const raw = JSON.parse(readFileSync(pricePath, 'utf-8'));
+      for (const [poolId, entries] of Object.entries(raw)) {
+        importPriceHistory(poolId, entries as { time: number; poolPrice: number; refPrice: number | null; vaultRate?: number }[]);
+      }
+      logger.info({ path: pricePath }, 'Loaded persisted price history');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load persisted price history');
+    }
+  }
+
+  const bandPath = dataDir + '/band-events.json';
+  if (existsSync(bandPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(bandPath, 'utf-8'));
+      for (const [poolId, entries] of Object.entries(raw)) {
+        importBandEvents(poolId, entries as BandEvent[]);
+      }
+      logger.info({ path: bandPath }, 'Loaded persisted band events');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load persisted band events');
+    }
+  }
+}
+
+function persistData(): void {
+  if (!dataDir) return;
+  try {
+    const priceObj: Record<string, unknown[]> = {};
+    for (const [poolId, entries] of priceHistory.entries()) {
+      priceObj[poolId] = entries;
+    }
+    writeFileSync(dataDir + '/price-history.json', JSON.stringify(priceObj));
+
+    const bandObj: Record<string, unknown[]> = {};
+    for (const [poolId, entries] of bandEvents.entries()) {
+      bandObj[poolId] = entries;
+    }
+    writeFileSync(dataDir + '/band-events.json', JSON.stringify(bandObj));
+  } catch {
+    // non-critical, will retry next interval
+  }
+}
+
+export function startPersistTimer(): void {
+  if (persistTimer) return;
+  persistTimer = setInterval(persistData, 5 * 60 * 1000); // every 5 minutes
+}
+
+export function persistNow(): void {
+  persistData();
 }
 
 export function updatePoolStatus(poolId: string, status: Partial<PoolStatus>): void {
