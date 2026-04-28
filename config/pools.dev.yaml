@@ -18,7 +18,7 @@ pools:
       nftManagerAddress: '0x3D3821D358f56395d4053954f98aec0E1F0fa568'
       swapRouterAddress: '0x565eD3D57fe40f78A46f348C220121AE093c3cF8'
     strategy:
-      rangeWidthPercent: 3.0
+      rangeWidthPercent: 1.0
       rebalanceThresholdPercent: 80
       minRebalanceIntervalMinutes: 30
       maxGasCostUsd: 5.0

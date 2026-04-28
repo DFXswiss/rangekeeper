@@ -242,6 +242,21 @@ export class RebalanceEngine {
     await positionManager.approveTokens(pool.token0.address, pool.token1.address);
     await this.ctx.swapExecutor.approveTokens(pool.token0.address, pool.token1.address);
 
+    // RESET_BANDS: close all existing bands and let the bot re-mint with current config
+    if (process.env.RESET_BANDS === 'true' && this.bandManager.getBandCount() > 0) {
+      this.logger.warn({ poolId: poolEntry.id }, 'RESET_BANDS: closing all bands');
+      const bandsToClose = [...this.bandManager.getBands()];
+      for (const band of bandsToClose) {
+        recordBandClose(poolEntry.id, band.tokenId.toNumber());
+      }
+      await this.emergencyWithdraw();
+      // Reset emergency state so the bot can re-mint
+      this.ctx.emergencyStop.reset();
+      this.state = 'IDLE';
+      await notifier.notify(`RESET_BANDS: All bands closed for ${poolEntry.id}, will re-mint with new config`);
+      this.logger.info({ poolId: poolEntry.id }, 'RESET_BANDS: all bands closed, will re-mint on next price update');
+    }
+
     this.setState('MONITORING');
   }
 
