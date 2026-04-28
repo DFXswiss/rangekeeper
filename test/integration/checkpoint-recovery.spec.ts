@@ -11,6 +11,12 @@ jest.mock('../../src/util/logger', () => ({
 
 jest.mock('../../src/health/health-server', () => ({
   updatePoolStatus: jest.fn(),
+  recordPrice: jest.fn().mockResolvedValue(undefined),
+  recordBandOpen: jest.fn(),
+  recordBandClose: jest.fn(),
+  getBandEvents: jest.fn().mockReturnValue([]),
+  recordPortfolio: jest.fn(),
+  setPortfolioInitial: jest.fn(),
 }));
 
 jest.mock('../../src/chain/contracts', () => ({
