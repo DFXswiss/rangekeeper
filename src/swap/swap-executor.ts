@@ -224,7 +224,8 @@ export class SwapExecutor {
     }
   }
 
-  private async waitAndConfirmNonce(tx: ContractTransaction): Promise<{ status?: number; transactionHash: string; gasUsed: BigNumber; logs: Array<{ topics: string[]; address: string; data: string }>; events?: Array<{ event?: string; args?: Record<string, unknown> }> }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async waitAndConfirmNonce(tx: ContractTransaction): Promise<any> {
     try {
       const receipt = await tx.wait();
       this.nonceTracker?.confirmNonce();
