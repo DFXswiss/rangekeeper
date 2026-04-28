@@ -515,13 +515,13 @@ function renderBandOverlays() {
 
     var div = document.createElement('div');
     div.className = 'band-overlay';
-    div.style.cssText = 'position:absolute;pointer-events:none;' +
+    div.style.cssText = 'position:absolute;pointer-events:none;z-index:1;' +
       'left:' + Math.min(xLeft, xRight) + 'px;' +
       'top:' + Math.min(yTop, yBottom) + 'px;' +
       'width:' + Math.abs(xRight - xLeft) + 'px;' +
-      'height:' + Math.abs(yBottom - yTop) + 'px;' +
+      'height:' + Math.max(Math.abs(yBottom - yTop), 2) + 'px;' +
       'background:' + (colors[idx % colors.length]) + ';' +
-      'border:1px solid rgba(255,255,255,0.1);';
+      'border:1px solid rgba(255,255,255,0.15);';
     container.appendChild(div);
   });
 }
