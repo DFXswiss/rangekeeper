@@ -51,15 +51,16 @@ const startTime = Date.now();
 
 // Price history ring buffer (7 days at 30s intervals = ~20160 entries)
 const MAX_HISTORY = 20160;
-const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: number | null; vaultRate: number }[]> = new Map();
+const priceHistory: Map<string, { time: number; poolPrice: number; refPrice: number | null; vaultRate: number }[]> =
+  new Map();
 let cachedRefPrice: number | null = null;
 let lastRefFetch = 0;
 
 // Portfolio history ring buffer (7 days at 30s intervals)
 export interface PortfolioSnapshot {
   time: number;
-  jusd: number;    // total JUSD equivalent (svJUSD * vaultRate)
-  btc: number;     // total cBTC/WCBTC (1:1)
+  jusd: number; // total JUSD equivalent (svJUSD * vaultRate)
+  btc: number; // total cBTC/WCBTC (1:1)
   valueUsd: number;
 }
 
@@ -116,7 +117,9 @@ export async function recordPrice(poolId: string, tick: number, vaultRate = 1): 
   if (history.length > MAX_HISTORY) history.shift();
 }
 
-export function getPriceHistory(poolId: string): { time: number; poolPrice: number; refPrice: number | null; vaultRate: number }[] {
+export function getPriceHistory(
+  poolId: string,
+): { time: number; poolPrice: number; refPrice: number | null; vaultRate: number }[] {
   return priceHistory.get(poolId) ?? [];
 }
 
@@ -129,7 +132,7 @@ export function importPriceHistory(
   const normalized = data.map((d) => ({ ...d, vaultRate: d.vaultRate ?? 1 }));
   const merged = [...normalized, ...existing];
   // Deduplicate by time, keep last
-  const seen = new Map<number, typeof merged[0]>();
+  const seen = new Map<number, (typeof merged)[0]>();
   for (const entry of merged) seen.set(entry.time, entry);
   const sorted = [...seen.values()].sort((a, b) => a.time - b.time);
   priceHistory.set(poolId, sorted.slice(-MAX_HISTORY));
@@ -209,7 +212,10 @@ export function loadPersistedData(): void {
     try {
       const raw = JSON.parse(readFileSync(pricePath, 'utf-8'));
       for (const [poolId, entries] of Object.entries(raw)) {
-        importPriceHistory(poolId, entries as { time: number; poolPrice: number; refPrice: number | null; vaultRate?: number }[]);
+        importPriceHistory(
+          poolId,
+          entries as { time: number; poolPrice: number; refPrice: number | null; vaultRate?: number }[],
+        );
       }
       logger.info({ path: pricePath }, 'Loaded persisted price history');
     } catch (err) {
@@ -714,11 +720,15 @@ function applyChartRange() {
   var cgPoints = sampled.filter(function(h) { return h.refPrice !== null; });
   cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
 
-  // Force Y-axis to include all band price ranges
+  // Force Y-axis to include band price ranges visible in the current time window
   if (bandRangeSeries && allBands.length > 0 && sampled.length > 1) {
     var vr = sampled[sampled.length - 1].vaultRate || 1;
     var bandMin = Infinity, bandMax = -Infinity;
+    var visibleStart = sampled[0].time;
+    var visibleEnd = sampled[sampled.length - 1].time;
     allBands.forEach(function(band) {
+      var bandClose = band.closeTime || Infinity;
+      if (bandClose < visibleStart || band.openTime > visibleEnd) return;
       var rawL = Math.pow(1.0001, band.tickLower);
       var rawU = Math.pow(1.0001, band.tickUpper);
       var top = (rawL < 0.01 ? 1 / rawL : rawU) * vr;
@@ -726,10 +736,12 @@ function applyChartRange() {
       if (top > bandMax) bandMax = top;
       if (bot < bandMin) bandMin = bot;
     });
-    bandRangeSeries.setData([
-      { time: sampled[0].time, value: bandMin },
-      { time: sampled[sampled.length - 1].time, value: bandMax },
-    ]);
+    if (bandMin < Infinity && bandMax > -Infinity) {
+      bandRangeSeries.setData([
+        { time: sampled[0].time, value: bandMin },
+        { time: sampled[sampled.length - 1].time, value: bandMax },
+      ]);
+    }
   }
 
   chart.timeScale().fitContent();
@@ -749,41 +761,73 @@ function findNearestTime(target, data) {
 
 function renderBandOverlays() {
   var container = document.getElementById('chart-container');
-  // Remove old overlays
   container.querySelectorAll('.band-overlay').forEach(function(el) { el.remove(); });
   if (!chart || !poolSeries || allBands.length === 0 || lastSampled.length === 0) return;
 
-  var colors = ['rgba(220,38,38,0.15)', 'rgba(234,179,8,0.15)', 'rgba(20,83,45,0.3)', 'rgba(20,83,45,0.4)', 'rgba(20,83,45,0.3)', 'rgba(234,179,8,0.15)', 'rgba(220,38,38,0.15)'];
-  var latestVaultRate = lastSampled.length > 0 ? (lastSampled[lastSampled.length - 1].vaultRate || 1) : 1;
+  var zoneColors = ['rgba(220,38,38,0.15)', 'rgba(234,179,8,0.15)', 'rgba(20,83,45,0.3)', 'rgba(20,83,45,0.4)', 'rgba(20,83,45,0.3)', 'rgba(234,179,8,0.15)', 'rgba(220,38,38,0.15)'];
+  var latestVaultRate = lastSampled[lastSampled.length - 1].vaultRate || 1;
+  var now = Math.floor(Date.now() / 1000);
 
-  allBands.forEach(function(band, idx) {
-    var rawLower = Math.pow(1.0001, band.tickLower);
-    var rawUpper = Math.pow(1.0001, band.tickUpper);
-    var priceTop = (rawLower < 0.01 ? 1 / rawLower : rawUpper) * latestVaultRate;
-    var priceBottom = (rawLower < 0.01 ? 1 / rawUpper : rawLower) * latestVaultRate;
+  // Build time segments where the active band set is stable
+  var changeSet = new Set();
+  allBands.forEach(function(b) {
+    changeSet.add(b.openTime);
+    if (b.closeTime) changeSet.add(b.closeTime);
+  });
+  changeSet.add(now);
+  var times = Array.from(changeSet).sort(function(a, b) { return a - b; });
 
-    var yTop = poolSeries.priceToCoordinate(priceTop);
-    var yBottom = poolSeries.priceToCoordinate(priceBottom);
-    if (yTop === null || yBottom === null) return;
+  for (var ti = 0; ti < times.length - 1; ti++) {
+    var tStart = times[ti];
+    var tEnd = times[ti + 1];
+    var tMid = (tStart + tEnd) / 2;
 
-    // Snap to nearest data point so timeToCoordinate finds a match
-    var snappedOpen = findNearestTime(band.openTime, lastSampled);
-    var xLeft = chart.timeScale().timeToCoordinate(snappedOpen);
-    var xRight = band.closeTime ? chart.timeScale().timeToCoordinate(findNearestTime(band.closeTime, lastSampled)) : container.clientWidth;
+    // Find bands active during this segment
+    var active = allBands.filter(function(b) {
+      return b.openTime <= tMid && (b.closeTime === null || b.closeTime > tMid);
+    });
+    if (active.length === 0) continue;
+
+    // Sort by tickLower — position determines zone color
+    active.sort(function(a, b) { return a.tickLower - b.tickLower; });
+
+    // X coordinates for this segment
+    var snappedStart = findNearestTime(tStart, lastSampled);
+    var xLeft = chart.timeScale().timeToCoordinate(snappedStart);
+    var xRight;
+    if (tEnd >= now) {
+      xRight = container.clientWidth;
+    } else {
+      xRight = chart.timeScale().timeToCoordinate(findNearestTime(tEnd, lastSampled));
+    }
     if (xLeft === null) xLeft = 0;
     if (xRight === null) xRight = container.clientWidth;
+    if (Math.abs(xRight - xLeft) < 1) continue;
 
-    var div = document.createElement('div');
-    div.className = 'band-overlay';
-    div.style.cssText = 'position:absolute;pointer-events:none;z-index:1;' +
-      'left:' + Math.min(xLeft, xRight) + 'px;' +
-      'top:' + Math.min(yTop, yBottom) + 'px;' +
-      'width:' + Math.abs(xRight - xLeft) + 'px;' +
-      'height:' + Math.max(Math.abs(yBottom - yTop), 2) + 'px;' +
-      'background:' + (colors[idx % colors.length]) + ';' +
-      'border:1px solid rgba(255,255,255,0.15);';
-    container.appendChild(div);
-  });
+    for (var j = 0; j < active.length; j++) {
+      var band = active[j];
+      var color = zoneColors[j % zoneColors.length];
+
+      var rawLower = Math.pow(1.0001, band.tickLower);
+      var rawUpper = Math.pow(1.0001, band.tickUpper);
+      var priceTop = (rawLower < 0.01 ? 1 / rawLower : rawUpper) * latestVaultRate;
+      var priceBottom = (rawLower < 0.01 ? 1 / rawUpper : rawLower) * latestVaultRate;
+
+      var yTop = poolSeries.priceToCoordinate(priceTop);
+      var yBottom = poolSeries.priceToCoordinate(priceBottom);
+      if (yTop === null || yBottom === null) continue;
+
+      var div = document.createElement('div');
+      div.className = 'band-overlay';
+      div.style.cssText = 'position:absolute;pointer-events:none;z-index:1;' +
+        'left:' + Math.min(xLeft, xRight) + 'px;' +
+        'top:' + Math.min(yTop, yBottom) + 'px;' +
+        'width:' + Math.abs(xRight - xLeft) + 'px;' +
+        'height:' + Math.max(Math.abs(yBottom - yTop), 2) + 'px;' +
+        'background:' + color + ';border:1px solid rgba(255,255,255,0.15);';
+      container.appendChild(div);
+    }
+  }
 }
 
 refreshChart();
@@ -810,10 +854,13 @@ async function refreshPortfolio() {
     var grid = document.getElementById('portfolio-grid');
     var pnlJusd = conf ? (last.jusd - conf.initialJusd) : 0;
     var pnlBtc = conf ? (last.btc - conf.initialBtc) : 0;
+    var firstValue = hist[0].valueUsd;
+    var pnlValue = last.valueUsd - firstValue;
+    var pnlValuePct = firstValue > 0 ? (pnlValue / firstValue * 100) : 0;
 
     grid.innerHTML = '<div class="metric"><div class="label">JUSD (total)</div><div class="value">' + last.jusd.toFixed(2) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlJusd >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlJusd >= 0 ? '+' : '') + pnlJusd.toFixed(2) + '</div>' : '') + '</div></div>' +
       '<div class="metric"><div class="label">BTC (total)</div><div class="value">' + last.btc.toFixed(8) + (conf ? '<div style="font-size:0.7rem;color:' + (pnlBtc >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlBtc >= 0 ? '+' : '') + pnlBtc.toFixed(8) + '</div>' : '') + '</div></div>' +
-      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + '</div></div>';
+      '<div class="metric"><div class="label">Value (USD)</div><div class="value">$' + formatNumber(last.valueUsd.toFixed(0)) + '<div style="font-size:0.7rem;color:' + (pnlValue >= 0 ? '#4ade80' : '#f87171') + '">' + (pnlValue >= 0 ? '+' : '') + '$' + formatNumber(pnlValue.toFixed(2)) + ' (' + (pnlValuePct >= 0 ? '+' : '') + pnlValuePct.toFixed(2) + '%)</div></div></div>';
 
     // Portfolio chart (token amounts over time)
     if (!portfolioChart) {
@@ -830,6 +877,8 @@ async function refreshPortfolio() {
       token0Series = portfolioChart.addLineSeries({ color: '#4ade80', lineWidth: 1, title: 'JUSD', priceScaleId: 'left' });
       token1Series = portfolioChart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'BTC' });
       portfolioChart.priceScale('left').applyOptions({ visible: true, borderColor: '#2a2a2a' });
+      portfolioChart.priceScale('right').applyOptions({ visible: true, borderColor: '#2a2a2a' });
+      token1Series.applyOptions({ priceFormat: { type: 'custom', formatter: function(p) { return p.toFixed(8); } } });
     }
 
     // Downsample
@@ -849,4 +898,3 @@ setInterval(refreshPortfolio, 30000);
 </body>
 </html>`;
 }
-
