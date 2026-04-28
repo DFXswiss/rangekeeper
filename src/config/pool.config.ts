@@ -67,6 +67,11 @@ const monitoringSchema = z.object({
   checkIntervalSeconds: z.number().int().min(5).max(3600),
 });
 
+const portfolioSchema = z.object({
+  initialJusd: z.number().nonnegative(),
+  initialBtc: z.number().nonnegative(),
+}).optional();
+
 const poolConfigSchema = z.object({
   id: z.string().min(1),
   chain: chainSchema,
@@ -74,6 +79,7 @@ const poolConfigSchema = z.object({
   strategy: strategySchema,
   monitoring: monitoringSchema,
   wrappers: z.array(wrapperSchema).optional().default([]),
+  portfolio: portfolioSchema,
 });
 
 const poolsFileSchema = z.object({

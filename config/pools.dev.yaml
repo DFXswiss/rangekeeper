@@ -31,5 +31,8 @@ pools:
       - wrappedToken: '0x1b70ae756b1089cc5948e4f8a2ad498df30e897d'  # svJUSD
         type: erc4626
         underlyingToken: '0x0987d3720d38847ac6dbb9d025b9de892a3ca35c'  # JUSD
+    portfolio:
+      initialJusd: 100
+      initialBtc: 0.0015
     monitoring:
       checkIntervalSeconds: 30
