@@ -223,8 +223,15 @@ export function loadPersistedData(): void {
       const raw = JSON.parse(readFileSync(portPath, 'utf-8'));
       if (raw.history) {
         for (const [poolId, entries] of Object.entries(raw.history)) {
+          // Migrate legacy field names (totalToken0→jusd, totalToken1→btc)
+          const migrated = (entries as Record<string, unknown>[]).map((e) => ({
+            time: e.time as number,
+            jusd: (e.jusd as number) ?? (e.totalToken0 as number) ?? 0,
+            btc: (e.btc as number) ?? (e.totalToken1 as number) ?? 0,
+            valueUsd: (e.valueUsd as number) ?? 0,
+          }));
           const existing = portfolioHistory.get(poolId) ?? [];
-          portfolioHistory.set(poolId, [...(entries as PortfolioSnapshot[]), ...existing]);
+          portfolioHistory.set(poolId, [...migrated, ...existing]);
         }
       }
       if (raw.config) {
