@@ -482,10 +482,15 @@ function applyChartRange() {
   var filtered = allHistory.filter(function(h) { return h.time >= cutoff; });
   if (filtered.length < 1) filtered = allHistory;
 
-  poolSeries.setData(filtered.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
-  var cgPoints = filtered.filter(function(h) { return h.refPrice !== null; });
+  // Downsample to max ~1500 points for chart performance
+  var maxPoints = 1500;
+  var step = filtered.length > maxPoints ? Math.ceil(filtered.length / maxPoints) : 1;
+  var sampled = step === 1 ? filtered : filtered.filter(function(_, i) { return i % step === 0 || i === filtered.length - 1; });
+
+  poolSeries.setData(sampled.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
+  var cgPoints = sampled.filter(function(h) { return h.refPrice !== null; });
   cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
-  chart.timeScale().setVisibleRange({ from: cutoff, to: now });
+  chart.timeScale().fitContent();
   renderBandOverlays();
 }
 
