@@ -11,7 +11,7 @@ import { BalanceTracker } from './balance-tracker';
 import { StateStore, RebalanceStage, BandState } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
-import { updatePoolStatus, recordPrice, recordBandOpen, recordBandClose } from '../health/health-server';
+import { updatePoolStatus, recordPrice, recordBandOpen, recordBandClose, getBandEvents } from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
@@ -231,11 +231,11 @@ export class RebalanceEngine {
       return;
     }
 
-    // Register existing bands in health server for chart overlays
-    // Use lastRebalanceTime (persisted from previous run) so overlays span the correct time range
-    const bandOpenTime = this.lastRebalanceTime > 0 ? Math.floor(this.lastRebalanceTime / 1000) : undefined;
-    for (const band of this.bandManager.getBands()) {
-      recordBandOpen(poolEntry.id, band.tokenId.toNumber(), band.tickLower, band.tickUpper, bandOpenTime);
+    // Register existing bands in health server for chart overlays (only if not already loaded from persistence)
+    if (getBandEvents(poolEntry.id).length === 0) {
+      for (const band of this.bandManager.getBands()) {
+        recordBandOpen(poolEntry.id, band.tokenId.toNumber(), band.tickLower, band.tickUpper);
+      }
     }
 
     // Ensure token approvals for both NFT manager and swap router
