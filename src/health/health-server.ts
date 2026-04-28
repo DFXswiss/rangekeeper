@@ -476,14 +476,15 @@ function setChartRange(seconds, btn) {
 
 function applyChartRange() {
   if (!chart || allHistory.length === 0) return;
-  var cutoff = Math.floor(Date.now() / 1000) - chartRangeSeconds;
+  var now = Math.floor(Date.now() / 1000);
+  var cutoff = now - chartRangeSeconds;
   var filtered = allHistory.filter(function(h) { return h.time >= cutoff; });
   if (filtered.length < 1) filtered = allHistory;
 
   poolSeries.setData(filtered.map(function(h) { return { time: h.time, value: h.poolPrice }; }));
   var cgPoints = filtered.filter(function(h) { return h.refPrice !== null; });
   cgSeries.setData(cgPoints.map(function(h) { return { time: h.time, value: h.refPrice }; }));
-  chart.timeScale().fitContent();
+  chart.timeScale().setVisibleRange({ from: cutoff, to: now });
   renderBandOverlays();
 }
 
