@@ -321,7 +321,7 @@ function getDashboardHtml(): string {
       <button onclick="setChartRange(604800, this)" class="range-btn active">7d</button>
     </div>
   </div>
-  <div id="chart-container" style="height:400px;position:relative"></div>
+  <div id="chart-container" style="height:400px;position:relative;overflow:hidden"></div>
   <div class="muted" style="font-size:0.75rem;margin-top:4px">Blue: BTC/USD (CoinGecko) &middot; Red: BTC/USD (Pool, vault-rate adjusted)</div>
 </div>
 
@@ -522,6 +522,10 @@ async function initChart() {
   chart.timeScale().fitContent();
   chart.timeScale().subscribeVisibleLogicalRangeChange(renderBandOverlays);
   chart.subscribeCrosshairMove(renderBandOverlays);
+  // Re-render overlays on price scale interactions (drag, scroll zoom)
+  container.addEventListener('mousemove', renderBandOverlays);
+  container.addEventListener('wheel', renderBandOverlays);
+  container.addEventListener('touchmove', renderBandOverlays);
 }
 
 async function refreshChart() {
