@@ -119,7 +119,10 @@ export function recordBandClose(poolId: string, tokenId: number): void {
 
 export function importBandEvents(poolId: string, data: BandEvent[]): void {
   const existing = bandEvents.get(poolId) ?? [];
-  bandEvents.set(poolId, [...data, ...existing]);
+  // Merge: imported entries take priority over existing ones with the same tokenId+closeTime
+  const importedIds = new Set(data.map((e) => `${e.tokenId}:${e.closeTime}`));
+  const filtered = existing.filter((e) => !importedIds.has(`${e.tokenId}:${e.closeTime}`));
+  bandEvents.set(poolId, [...data, ...filtered]);
 }
 
 export function getBandEvents(poolId: string): BandEvent[] {
