@@ -47,8 +47,8 @@ async function main(): Promise<void> {
 
   // Build notifier
   const notifiers: Notifier[] = [new ConsoleNotifier()];
-  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
-    notifiers.push(new TelegramNotifier(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_ID));
+  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_IDS.length > 0) {
+    notifiers.push(new TelegramNotifier(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_IDS));
   }
   if (env.DISCORD_WEBHOOK_URL) {
     notifiers.push(new DiscordNotifier(env.DISCORD_WEBHOOK_URL));

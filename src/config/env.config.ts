@@ -9,7 +9,18 @@ const envSchema = z.object({
   ETHEREUM_RPC_URL: z.string().url().optional(),
   POLYGON_RPC_URL: z.string().url().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional().default(''),
-  TELEGRAM_CHAT_ID: z.string().optional().default(''),
+  // Comma-separated list of chat ids that should receive notifications. Each operator's
+  // private chat-id (or a group id) goes here, no spaces required.
+  TELEGRAM_CHAT_IDS: z
+    .string()
+    .optional()
+    .default('')
+    .transform((s) =>
+      s
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    ),
   DISCORD_WEBHOOK_URL: z.string().optional().default(''),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
