@@ -9,7 +9,10 @@ const envSchema = z.object({
   ETHEREUM_RPC_URL: z.string().url().optional(),
   POLYGON_RPC_URL: z.string().url().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional().default(''),
-  TELEGRAM_CHAT_ID: z.string().optional().default(''),
+  // Path to the persisted subscribers file. Each operator subscribes themselves by
+  // sending /start (or /subscribe) to the bot — chat-ids are appended here and survive
+  // container restarts.
+  TELEGRAM_GROUPS_JSON: z.string().optional().default(''),
   DISCORD_WEBHOOK_URL: z.string().optional().default(''),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
