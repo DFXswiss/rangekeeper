@@ -1,3 +1,4 @@
+export { TELEGRAM_BOT } from './constants';
 export { loadEnvConfig, getRpcUrl, type EnvConfig } from './env.config';
 export {
   loadPoolConfigs,

@@ -5,6 +5,7 @@ dotenv.config({ path: '/app/data/.env' }); // Azure File Share
 dotenv.config(); // Fallback: .env in project root (local dev)
 
 const envSchema = z.object({
+  DEPLOYMENT_ENV: z.enum(['prd', 'dev']),
   PRIVATE_KEY: z.string().startsWith('0x').min(66),
   ETHEREUM_RPC_URL: z.string().url().optional(),
   POLYGON_RPC_URL: z.string().url().optional(),
