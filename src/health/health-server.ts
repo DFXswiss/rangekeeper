@@ -95,11 +95,17 @@ export function getPortfolioConfig(poolId: string): PortfolioConfig | undefined 
   return portfolioConfig.get(poolId);
 }
 
+// CoinGecko origin. Defaults to the in-cluster pricing-proxy so the upstream
+// key + 60 s cache + quota monitor live in one place. Override with
+// `https://api.coingecko.com` (free tier) or `https://pro-api.coingecko.com`
+// for local development.
+const COINGECKO_BASE_URL = process.env.COINGECKO_BASE_URL ?? 'http://pricing-proxy:8080/coingecko';
+
 async function fetchRefPrice(): Promise<void> {
   if (Date.now() - lastRefFetch < 60_000) return;
   lastRefFetch = Date.now();
   try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+    const res = await fetch(`${COINGECKO_BASE_URL}/api/v3/simple/price?ids=bitcoin&vs_currencies=usd`);
     const data = (await res.json()) as { bitcoin?: { usd?: number } };
     cachedRefPrice = data.bitcoin?.usd ?? null;
   } catch {
