@@ -260,7 +260,7 @@ export class RebalanceEngine {
     }
 
     // RESET_BANDS: close all existing bands and let the bot re-mint with current config
-    if (process.env.RESET_BANDS === 'true' && this.bandManager.getBandCount() > 0) {
+    if (process.env.RESET_BANDS === 'true' && this.bandManager.getBandCount() > 0 && this.tradingEnabled) {
       this.logger.warn({ poolId: poolEntry.id }, 'RESET_BANDS: closing all bands');
       const bandsToClose = [...this.bandManager.getBands()];
       for (const band of bandsToClose) {
