@@ -3,7 +3,17 @@ import { loadEnvConfig, loadPoolConfigs } from './config';
 import { createLogger } from './util/logger';
 import { createFailoverProvider, getWallet, verifyConnection } from './chain/evm-provider';
 import { readFileSync, existsSync } from 'fs';
-import { updatePoolStatus, importPriceHistory, importBandEvents, setDataDir, loadPersistedData, startPersistTimer, persistNow, getPriceHistory, getBandEvents } from './health/health-server';
+import {
+  updatePoolStatus,
+  importPriceHistory,
+  importBandEvents,
+  setDataDir,
+  loadPersistedData,
+  startPersistTimer,
+  persistNow,
+  getPriceHistory,
+  getBandEvents,
+} from './health/health-server';
 import { getPoolContract, getFactoryContract } from './chain/contracts';
 import { getChainAddresses } from './config/chain-addresses';
 import { PoolMonitor } from './core/pool-monitor';
@@ -233,19 +243,24 @@ async function main(): Promise<void> {
       };
 
       // Wrap tokens (cBTC→WCBTC, JUSD→svJUSD) before engine starts
-      if (poolEntry.wrappers && poolEntry.wrappers.length > 0 && !env.DRY_RUN) {
+      if (poolEntry.enabled && poolEntry.wrappers && poolEntry.wrappers.length > 0 && !env.DRY_RUN) {
         if (nonceTracker) await nonceTracker.initialize();
         const tokenWrapper = new TokenWrapper(() => wallet, nonceTracker);
         for (const wrapConfig of poolEntry.wrappers) {
           try {
             await tokenWrapper.wrapIfNeeded(wrapConfig);
           } catch (err) {
-            logger.warn({ poolId: poolEntry.id, wrapper: wrapConfig.wrappedToken, err }, 'Token wrapping failed (continuing)');
+            logger.warn(
+              { poolId: poolEntry.id, wrapper: wrapConfig.wrappedToken, err },
+              'Token wrapping failed (continuing)',
+            );
           }
         }
+      } else if (!poolEntry.enabled) {
+        logger.warn({ poolId: poolEntry.id }, 'Trading disabled: skipping token wrapping');
       }
 
-      const engine = new RebalanceEngine(ctx);
+      const engine = new RebalanceEngine(ctx, poolEntry.enabled);
       engines.push(engine);
 
       await engine.initialize();
