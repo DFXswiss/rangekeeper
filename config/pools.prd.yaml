@@ -1,5 +1,6 @@
 pools:
   - id: 'svjusd-wcbtc-citrea'
+    enabled: false
     chain:
       name: 'citrea'
       chainId: 4114
