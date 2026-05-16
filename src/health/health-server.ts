@@ -1,5 +1,6 @@
 import express from 'express';
 import { writeFileSync, readFileSync, existsSync } from 'fs';
+import { loadEnvConfig, TELEGRAM_BOT } from '../config';
 import { getLogger } from '../util/logger';
 
 export interface BotStatus {
@@ -94,11 +95,17 @@ export function getPortfolioConfig(poolId: string): PortfolioConfig | undefined 
   return portfolioConfig.get(poolId);
 }
 
+// CoinGecko origin. Defaults to the in-cluster pricing-proxy so the upstream
+// key + 60 s cache + quota monitor live in one place. Override with
+// `https://api.coingecko.com` (free tier) or `https://pro-api.coingecko.com`
+// for local development.
+const COINGECKO_BASE_URL = process.env.COINGECKO_BASE_URL ?? 'http://pricing-proxy:8080/coingecko';
+
 async function fetchRefPrice(): Promise<void> {
   if (Date.now() - lastRefFetch < 60_000) return;
   lastRefFetch = Date.now();
   try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+    const res = await fetch(`${COINGECKO_BASE_URL}/api/v3/simple/price?ids=bitcoin&vs_currencies=usd`);
     const data = (await res.json()) as { bitcoin?: { usd?: number } };
     cachedRefPrice = data.bitcoin?.usd ?? null;
   } catch {
@@ -895,6 +902,13 @@ async function refreshPortfolio() {
 refreshPortfolio();
 setInterval(refreshPortfolio, 30000);
 </script>
+
+<footer style="border-top:1px solid #2a2a2a;margin-top:32px;padding:20px 0;display:flex;justify-content:flex-end">
+  <a href="${TELEGRAM_BOT[loadEnvConfig().DEPLOYMENT_ENV]}" target="_blank" rel="noreferrer noopener" title="Telegram alerts bot" aria-label="Telegram alerts bot" style="display:inline-flex;align-items:center;gap:8px;color:#888;text-decoration:none;font-size:0.85rem">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg>
+    <span>Get alerts</span>
+  </a>
+</footer>
 </body>
 </html>`;
 }

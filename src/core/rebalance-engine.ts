@@ -11,7 +11,15 @@ import { BalanceTracker } from './balance-tracker';
 import { StateStore, RebalanceStage, BandState } from '../persistence/state-store';
 import { HistoryLogger, OperationType } from '../persistence/history-logger';
 import { Notifier } from '../notification/notifier';
-import { updatePoolStatus, recordPrice, recordBandOpen, recordBandClose, getBandEvents, recordPortfolio, setPortfolioInitial } from '../health/health-server';
+import {
+  updatePoolStatus,
+  recordPrice,
+  recordBandOpen,
+  recordBandClose,
+  getBandEvents,
+  recordPortfolio,
+  setPortfolioInitial,
+} from '../health/health-server';
 import { PoolEntry } from '../config';
 import { getErc20Contract } from '../chain/contracts';
 import { GasOracle, estimateGasCostUsd } from '../chain/gas-oracle';
@@ -64,7 +72,10 @@ export class RebalanceEngine {
   private cachedLiquidity: Map<string, number> = new Map();
   private lastLiquidityFetch = 0;
 
-  constructor(private readonly ctx: RebalanceContext) {}
+  constructor(
+    private readonly ctx: RebalanceContext,
+    private readonly tradingEnabled: boolean = true,
+  ) {}
 
   isRebalancing(): boolean {
     return this.rebalanceLock;
@@ -241,11 +252,15 @@ export class RebalanceEngine {
     }
 
     // Ensure token approvals for both NFT manager and swap router
-    await positionManager.approveTokens(pool.token0.address, pool.token1.address);
-    await this.ctx.swapExecutor.approveTokens(pool.token0.address, pool.token1.address);
+    if (this.tradingEnabled) {
+      await positionManager.approveTokens(pool.token0.address, pool.token1.address);
+      await this.ctx.swapExecutor.approveTokens(pool.token0.address, pool.token1.address);
+    } else {
+      this.logger.warn({ poolId: poolEntry.id }, 'Trading disabled: skipping token approvals');
+    }
 
     // RESET_BANDS: close all existing bands and let the bot re-mint with current config
-    if (process.env.RESET_BANDS === 'true' && this.bandManager.getBandCount() > 0) {
+    if (process.env.RESET_BANDS === 'true' && this.bandManager.getBandCount() > 0 && this.tradingEnabled) {
       this.logger.warn({ poolId: poolEntry.id }, 'RESET_BANDS: closing all bands');
       const bandsToClose = [...this.bandManager.getBands()];
       for (const band of bandsToClose) {
@@ -297,7 +312,9 @@ export class RebalanceEngine {
       currentTick: poolState.tick,
       activeBand: this.bandManager.getBandIndexForTick(poolState.tick),
       bands: this.bandManager.getBands().map((b) => {
-        const event = getBandEvents(poolEntry.id).find((e) => e.tokenId === b.tokenId.toNumber() && e.closeTime === null);
+        const event = getBandEvents(poolEntry.id).find(
+          (e) => e.tokenId === b.tokenId.toNumber() && e.closeTime === null,
+        );
         return {
           index: b.index,
           tokenId: b.tokenId.toNumber(),
@@ -323,6 +340,9 @@ export class RebalanceEngine {
 
     // Portfolio tracking
     this.trackPortfolio(poolEntry, poolState, vaultRate).catch(() => {});
+
+    // Trading disabled → stop here; monitoring/dashboards stay live.
+    if (!this.tradingEnabled) return;
 
     // Check depeg
     if (await this.checkDepeg(poolState)) return;
@@ -757,11 +777,18 @@ export class RebalanceEngine {
         { tokenId: mintResult.tokenId, tickLower: newBandTicks.tickLower, tickUpper: newBandTicks.tickUpper },
         direction === 'lower' ? 'start' : 'end',
       );
-      recordBandOpen(poolEntry.id, mintResult.tokenId.toNumber(), newBandTicks.tickLower, newBandTicks.tickUpper, undefined, {
-        amount0: mintResult.amount0.toString(),
-        amount1: mintResult.amount1.toString(),
-        liquidity: mintResult.liquidity.toString(),
-      });
+      recordBandOpen(
+        poolEntry.id,
+        mintResult.tokenId.toNumber(),
+        newBandTicks.tickLower,
+        newBandTicks.tickUpper,
+        undefined,
+        {
+          amount0: mintResult.amount0.toString(),
+          amount1: mintResult.amount1.toString(),
+          liquidity: mintResult.liquidity.toString(),
+        },
+      );
 
       this.lastRebalanceTime = Date.now();
       this.consecutiveErrors = 0;
