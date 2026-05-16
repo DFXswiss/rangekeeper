@@ -159,6 +159,7 @@ Pool configurations contain token addresses, fee tier, strategy parameters and m
 ```yaml
 pools:
   - id: "usdt-zchf-ethereum"
+    enabled: true                       # optional, default true; set false to pause trading
     chain:
       name: "ethereum"
       chainId: 1
@@ -185,6 +186,8 @@ pools:
     monitoring:
       checkIntervalSeconds: 30            # poll pool price every 30s
 ```
+
+**`enabled: false`** keeps the container running for monitoring (price polling, dashboard, history, portfolio tracking) but skips every on-chain write — token wrapping, NFT/SwapRouter approvals, depeg-driven emergency withdraw, initial band mint and band rebalances. Use it to pause a pool without losing its dashboard or having to redeploy. To resume, flip back to `true` (or remove the field) and restart.
 
 ## Running
 
